@@ -1598,7 +1598,7 @@ async def update_role_permissions(request: Request):
     await require_admin(request)
     body = await request.json()  # { role: { feature_key: bool, ... }, ... }
     for role, features in body.items():
-        if role not in ("manager", "employee"):
+        if role not in ("manager", "employee", "devops_manager"):
             continue
         for feature_key, enabled in features.items():
             await execute_query(

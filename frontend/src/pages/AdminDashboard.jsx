@@ -165,7 +165,7 @@ export default function AdminDashboard() {
   const [levelsForm, setLevelsForm] = useState([]);
 
   // Role permissions
-  const [rolePerms, setRolePerms] = useState({ manager: {}, employee: {} });
+  const [rolePerms, setRolePerms] = useState({ manager: {}, devops_manager: {}, employee: {} });
   const [rolePermsLoading, setRolePermsLoading] = useState(false);
 
   // CR approve dialog
@@ -223,7 +223,7 @@ export default function AdminDashboard() {
         // Also fetch org chart and role permissions for admin
         api.get("/admin/org-chart").then(r => setOrgNodes(r.data)).catch(() => {});
         api.get("/org-levels").then(r => setOrgLevels(r.data || [])).catch(() => {});
-        api.get("/admin/role-permissions").then(r => setRolePerms(r.data || { manager: {}, employee: {} })).catch(() => {});
+        api.get("/admin/role-permissions").then(r => setRolePerms({ manager: {}, devops_manager: {}, employee: {}, ...(r.data || {}) })).catch(() => {});
         api.get("/admin/salary-components").then(r => { setSalaryComponents(r.data || []); setComponentsForm(r.data || []); }).catch(() => {});
       }
       // Fetch managers list for reporting manager dropdown
@@ -991,7 +991,7 @@ export default function AdminDashboard() {
   ];
 
   const isAdmin = user?.role === "admin";
-  const isManager = user?.role === "manager";
+  const isManager = ["manager", "devops_manager"].includes(user?.role);
 
   const allNavItems = [
     { id: "overview", label: "Overview", icon: House },
@@ -1008,7 +1008,13 @@ export default function AdminDashboard() {
     { id: "role-access", label: "Role Access", icon: ShieldCheck, adminOnly: true },
   ];
 
-  const navItems = allNavItems.filter(item => !item.adminOnly || isAdmin);
+  const navItems = allNavItems.filter(item => {
+    if (item.adminOnly) return isAdmin;
+    if (isAdmin) return true;
+    // For manager/devops_manager, apply role-based access control
+    if (isManager) return rolePerms[user?.role]?.[item.id] !== false;
+    return true;
+  });
 
   return (
     <div className="min-h-screen transition-colors duration-200" style={{ background: 'var(--bg-page)' }}>
@@ -3497,6 +3503,22 @@ export default function AdminDashboard() {
                 ]
               },
               {
+                role: "devops_manager",
+                label: "DevOps Manager",
+                color: "purple",
+                features: [
+                  { key: "employees", label: "Employees Tab" },
+                  { key: "attendance", label: "Attendance Tab" },
+                  { key: "leaves", label: "Leave Requests" },
+                  { key: "wfh", label: "WFH Requests" },
+                  { key: "permissions", label: "Permissions" },
+                  { key: "change-requests", label: "Change Requests" },
+                  { key: "payroll", label: "Payroll (view)" },
+                  { key: "holidays", label: "Holidays" },
+                  { key: "policy", label: "Company Policy" },
+                ]
+              },
+              {
                 role: "employee",
                 label: "Employee",
                 color: "blue",
@@ -3513,7 +3535,11 @@ export default function AdminDashboard() {
             ].map(({ role, label, color, features }) => (
               <div key={role} className="bg-white border border-slate-200 rounded-xl mb-6" style={{ boxShadow: '0 1px 4px rgba(15,23,42,0.04)' }}>
                 <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-3">
-                  <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase ${color === 'orange' ? 'bg-orange-50 text-orange-700 border border-orange-200' : 'bg-blue-50 text-[#002FA7] border border-blue-200'}`}>{label}</span>
+                  <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase ${
+                    color === 'orange' ? 'bg-orange-50 text-orange-700 border border-orange-200' :
+                    color === 'purple' ? 'bg-purple-50 text-purple-700 border border-purple-200' :
+                    'bg-blue-50 text-[#002FA7] border border-blue-200'
+                  }`}>{label}</span>
                   <p className="text-sm text-slate-500">Toggle which features this role can access</p>
                 </div>
                 <div className="p-6 grid grid-cols-2 md:grid-cols-3 gap-4">
