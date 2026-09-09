@@ -3149,7 +3149,11 @@ async def get_all_crs(request: Request):
     if user["role"] == "admin":
         crs = await execute_query("SELECT * FROM change_requests ORDER BY created_at DESC", fetch_all=True)
     else:
-        crs = await execute_query("SELECT * FROM change_requests WHERE status IN ('pending', 'manager_approved') ORDER BY created_at DESC", fetch_all=True)
+        # Managers only see CRs assigned to them via assigned_manager_id
+        crs = await execute_query(
+            "SELECT * FROM change_requests WHERE assigned_manager_id = %s ORDER BY created_at DESC",
+            (user["id"],), fetch_all=True
+        )
     result = []
     for cr in (crs or []):
         d = dict(cr)
@@ -3246,7 +3250,11 @@ async def get_notifications(request: Request):
     if user["role"] == "admin":
         pending_crs = await execute_query("SELECT COUNT(*) as cnt FROM change_requests WHERE status IN ('pending', 'manager_approved')", fetch_one=True)
     else:
-        pending_crs = await execute_query("SELECT COUNT(*) as cnt FROM change_requests WHERE manager_approval = 'pending'", fetch_one=True)
+        # Managers only see CRs assigned to them that are still pending their action
+        pending_crs = await execute_query(
+            "SELECT COUNT(*) as cnt FROM change_requests WHERE assigned_manager_id = %s AND manager_approval = 'pending'",
+            (user["id"],), fetch_one=True
+        )
 
     total = (pending_leaves["cnt"] or 0) + (pending_wfh["cnt"] or 0) + (pending_crs["cnt"] or 0) + (pending_permissions["cnt"] or 0)
     items = []

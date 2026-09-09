@@ -2421,7 +2421,9 @@ export default function AdminDashboard() {
           <>
             <div className="mb-8">
               <h1 className="text-3xl font-bold text-slate-900 font-['Outfit'] tracking-tight">Change Requests</h1>
-              <p className="text-slate-500 mt-1 text-sm">Review and approve work/installation requests (2-step approval)</p>
+              <p className="text-slate-500 mt-1 text-sm">
+                {isAdmin ? "Review and approve work/installation requests (2-step approval)" : "Change requests assigned to you for approval"}
+              </p>
             </div>
 
             {/* Summary cards */}
@@ -2452,8 +2454,9 @@ export default function AdminDashboard() {
                     <th className="table-header">Title</th>
                     <th className="table-header">Type</th>
                     <th className="table-header">Priority</th>
+                    {isAdmin && <th className="table-header">Assigned To</th>}
                     <th className="table-header">Manager</th>
-                    <th className="table-header">Admin</th>
+                    {isAdmin && <th className="table-header">Admin</th>}
                     <th className="table-header">Status</th>
                     <th className="table-header">Actions</th>
                   </tr>
@@ -2461,7 +2464,7 @@ export default function AdminDashboard() {
                 <tbody>
                   {changeRequests.length === 0 ? (
                     <tr>
-                      <td colSpan="8" className="text-center py-8 text-gray-500">No change requests</td>
+                      <td colSpan={isAdmin ? 9 : 6} className="text-center py-8 text-gray-500">No change requests{isManager ? " assigned to you" : ""}</td>
                     </tr>
                   ) : (
                     changeRequests.map((cr) => (
@@ -2475,7 +2478,7 @@ export default function AdminDashboard() {
                           <p className="text-xs text-gray-500 line-clamp-1">{cr.description}</p>
                         </td>
                         <td className="table-cell">
-                          <span className="text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-700">{cr.cr_type}</span>
+                          <span className={`text-xs px-2 py-1 rounded-full bg-gray-100 text-gray-700`}>{cr.cr_type}</span>
                         </td>
                         <td className="table-cell">
                           <span className={`text-xs px-2 py-1 rounded-full font-medium ${
@@ -2484,6 +2487,11 @@ export default function AdminDashboard() {
                             "bg-yellow-50 text-yellow-600"
                           }`}>{cr.priority}</span>
                         </td>
+                        {isAdmin && (
+                          <td className="table-cell">
+                            <p className="text-sm font-medium text-slate-700">{cr.assigned_manager_name || "—"}</p>
+                          </td>
+                        )}
                         <td className="table-cell">
                           <span className={`text-xs font-medium ${
                             cr.manager_approval === "approved" ? "text-[#00C853]" :
@@ -2495,6 +2503,7 @@ export default function AdminDashboard() {
                           </span>
                           {cr.manager_notes && <p className="text-xs text-gray-400 mt-0.5">{cr.manager_notes}</p>}
                         </td>
+                        {isAdmin && (
                         <td className="table-cell">
                           <span className={`text-xs font-medium ${
                             cr.admin_approval === "approved" ? "text-[#00C853]" :
@@ -2506,6 +2515,7 @@ export default function AdminDashboard() {
                           </span>
                           {cr.admin_notes && <p className="text-xs text-gray-400 mt-0.5">{cr.admin_notes}</p>}
                         </td>
+                        )}
                         <td className="table-cell">
                           <span className={`text-xs px-2 py-1 rounded-full font-medium ${
                             cr.status === "approved" ? "bg-green-50 text-[#00C853]" :
