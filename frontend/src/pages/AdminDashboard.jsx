@@ -238,6 +238,12 @@ export default function AdminDashboard() {
     fetchData();
   }, [fetchData]);
 
+  // Auto-refresh all data every 60 seconds
+  useEffect(() => {
+    const interval = setInterval(fetchData, 60000);
+    return () => clearInterval(interval);
+  }, [fetchData]);
+
   // Poll notifications every 30 seconds + fetch heatmap
   useEffect(() => {
     const fetchNotifications = async () => {

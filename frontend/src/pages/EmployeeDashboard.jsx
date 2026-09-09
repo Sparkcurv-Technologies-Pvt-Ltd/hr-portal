@@ -165,6 +165,12 @@ export default function EmployeeDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchData]);
 
+  // Auto-refresh all data every 60 seconds
+  useEffect(() => {
+    const interval = setInterval(fetchData, 60000);
+    return () => clearInterval(interval);
+  }, [fetchData]);
+
   // Live interval: tick every second when timer is running
   useEffect(() => {
     if (timerStatus.is_running) {
