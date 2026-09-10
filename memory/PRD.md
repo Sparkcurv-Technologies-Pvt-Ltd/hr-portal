@@ -114,6 +114,10 @@ Build an HR portal for all employees with Leave, Login, logout, break etc., fron
 - ✅ **Email Payslip**: "Email" button on each payslip row sends PDF attachment to employee via Gmail SMTP.
 - ✅ **Payslip PDF uses DB components**: PDF earnings breakdown now reads from `salary_components` table instead of hardcoded values.
 
+### Sep 2026 (cont.)
+- ✅ **Environment recovery**: MariaDB was missing from the container (fresh pod had no mariadb-server installed, no `backend/.env`/`frontend/.env`, and `/app/mysql-data` was corrupted — missing `ib_logfile0`). Installed `mariadb-server`, added a `[program:mariadb]` supervisor block running `/app/start_mysql.sh`, reinitialized `/app/mysql-data` fresh, ran `database_setup.sql`, and recreated `backend/.env` (MYSQL_*, JWT_SECRET, ADMIN_EMAIL/PASSWORD, FRONTEND_URL, BACKEND_URL) + `frontend/.env` (REACT_APP_BACKEND_URL). Backend auto-migrated all tables/columns on startup and re-seeded admin (`admin@hrportal.com` / `Admin@123`) and default policies. Old corrupted data backed up at `/app/mysql-data-old-corrupt`.
+- ✅ **Manager Clock In/Out/Break**: Extracted the Employee "Time Tracker" widget into a shared component `frontend/src/components/TimeTrackerCard.jsx` (self-contained: fetches `/attendance/status`, `/attendance/my-shift`, `/attendance/timer/today`; handles clock-in/out, break start/end, GPS check, flexible timer). Added new sidebar tab "My Attendance" (`managerOnly`, visible only to `manager`/`devops_manager`, not togglable via Role Access) in `AdminDashboard.jsx` that renders `<TimeTrackerCard />`. No backend changes needed — attendance endpoints were already role-agnostic (keyed by `user_id`), so Manager attendance is stored in the same `attendance`/`breaks` tables and shows up in Admin's Attendance tab, Heatmap, and reports exactly like Employees. Verified end-to-end via curl (clock-in → break start/end → clock-out → visible in `/api/admin/attendance`) and screenshot of the new "My Attendance" tab.
+
 ## Pending Items (Prioritized)
 
 ### P1 - High  

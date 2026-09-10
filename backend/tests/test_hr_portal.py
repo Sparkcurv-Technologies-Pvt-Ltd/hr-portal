@@ -7,7 +7,7 @@ import requests
 import os
 from datetime import datetime, timedelta
 
-BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://workforce-dash-18.preview.emergentagent.com')
+BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://attendance-hub-1369.preview.emergentagent.com')
 
 # Test data
 ADMIN_EMAIL = "admin@hrportal.com"

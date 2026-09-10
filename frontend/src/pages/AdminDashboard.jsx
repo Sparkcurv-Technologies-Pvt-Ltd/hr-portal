@@ -19,6 +19,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { CRApproveDialog } from "../components/CRApproveDialog";
 import { OrgTreeNode, OrgTreeView } from "../components/OrgTreeNode";
 import { ResetPortalButton } from "../components/ResetPortalButton";
+import { TimeTrackerCard } from "../components/TimeTrackerCard";
 import { MapContainer, TileLayer, Marker, Popup, Circle } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -995,6 +996,7 @@ export default function AdminDashboard() {
 
   const allNavItems = [
     { id: "overview", label: "Overview", icon: House },
+    { id: "my-attendance", label: "My Attendance", icon: ClockClockwise, managerOnly: true },
     { id: "employees", label: "Employees", icon: Users, adminOnly: true },
     { id: "payroll", label: "Payroll", icon: CurrencyDollar, adminOnly: true },
     { id: "change-requests", label: "Change Requests", icon: GitPullRequest },
@@ -1009,6 +1011,7 @@ export default function AdminDashboard() {
   ];
 
   const navItems = allNavItems.filter(item => {
+    if (item.managerOnly) return isManager;
     if (item.adminOnly) return isAdmin;
     if (isAdmin) return true;
     // For manager/devops_manager, apply role-based access control
@@ -1132,6 +1135,21 @@ export default function AdminDashboard() {
 
       {/* Main Content */}
       <main className="ml-64 p-8">
+        {/* My Attendance Tab (Manager clock in/out) */}
+        {activeTab === "my-attendance" && isManager && (
+          <>
+            <div className="mb-8">
+              <h1 className="text-3xl font-bold text-slate-900 font-['Outfit'] tracking-tight">
+                Good {new Date().getHours() < 12 ? 'Morning' : new Date().getHours() < 18 ? 'Afternoon' : 'Evening'}, {user?.name?.split(' ')[0]}
+              </h1>
+              <p className="text-slate-500 mt-1 text-sm">{format(new Date(), "EEEE, MMMM d, yyyy")}</p>
+            </div>
+            <div className="max-w-md">
+              <TimeTrackerCard user={user} api={api} />
+            </div>
+          </>
+        )}
+
         {/* Overview Tab */}
         {activeTab === "overview" && analytics && (
           <>
