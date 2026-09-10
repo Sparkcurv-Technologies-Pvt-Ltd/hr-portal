@@ -37,33 +37,6 @@ BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8001")
 _extra_emails_raw = os.environ.get("EXTRA_NOTIFICATION_EMAILS", "")
 EXTRA_NOTIFICATION_EMAILS = [e.strip() for e in _extra_emails_raw.split(",") if e.strip()]
 
-def _sign_review_token(cr_id: int, reviewer_type: str) -> str:
-    """Generate an HMAC-signed token for email review links (valid 7 days)."""
-    secret = os.environ.get("JWT_SECRET", "secret")
-    expires = int((datetime.now(timezone.utc) + timedelta(days=7)).timestamp())
-    payload = f"{cr_id}:{reviewer_type}:{expires}"
-    sig = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
-    raw = f"{cr_id}|{reviewer_type}|{expires}|{sig}"
-    return _b64.urlsafe_b64encode(raw.encode()).decode()
-
-def _verify_review_token(token: str) -> tuple[int, str]:
-    """Verify token and return (cr_id, reviewer_type) or raise HTTPException."""
-    try:
-        raw = _b64.urlsafe_b64decode(token.encode() + b"==").decode()
-        cr_id_str, reviewer_type, expires_str, sig = raw.split("|")
-        cr_id = int(cr_id_str)
-        expires = int(expires_str)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid review link")
-    if datetime.now(timezone.utc).timestamp() > expires:
-        raise HTTPException(status_code=400, detail="Review link has expired")
-    secret = os.environ.get("JWT_SECRET", "secret")
-    payload = f"{cr_id}:{reviewer_type}:{expires}"
-    expected = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(sig, expected):
-        raise HTTPException(status_code=400, detail="Invalid review link")
-    return cr_id, reviewer_type
-
 def _send_email(to_addresses: list[str], subject: str, html_body: str) -> None:
     """Send HTML email via Gmail SMTP. Silently skips if credentials not set."""
     if not GMAIL_USER or not GMAIL_APP_PASSWORD:
@@ -114,11 +87,9 @@ def _send_email_with_pdf(to_address: str, subject: str, html_body: str, pdf_buff
     except Exception as e:
         logging.getLogger("hr_portal").warning(f"Payslip email failed to {to_address}: {e}")
 
-def _cr_email_html(cr: dict, review_token: str, reviewer_type: str) -> str:
-    """Build the CR notification HTML email with Approve / Reject buttons."""
-    backend_url = BACKEND_URL.rstrip("/")
-    approve_url = f"{backend_url}/api/cr/review/{review_token}?action=approve"
-    reject_url  = f"{backend_url}/api/cr/review/{review_token}?action=reject"
+def _cr_email_html(cr: dict, reviewer_label: str) -> str:
+    """Build a notify-only CR email — no action links. Approval must happen after portal login."""
+    login_url = f"{FRONTEND_URL.rstrip('/')}/login"
     priority_color = {"high": "#dc2626", "medium": "#d97706", "low": "#16a34a"}.get(
         (cr.get("priority") or "medium").lower(), "#d97706"
     )
@@ -128,7 +99,7 @@ def _cr_email_html(cr: dict, review_token: str, reviewer_type: str) -> str:
 <table width="580" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.1)">
   <tr><td style="background:#002FA7;padding:28px 32px">
     <h1 style="margin:0;color:#ffffff;font-size:22px;font-weight:700">Sparkcurv HR Portal</h1>
-    <p style="margin:6px 0 0;color:#93c5fd;font-size:14px">Change Request Approval Required</p>
+    <p style="margin:6px 0 0;color:#93c5fd;font-size:14px">Change Request Notification</p>
   </td></tr>
   <tr><td style="padding:32px">
     <p style="margin:0 0 8px;font-size:13px;color:#6b7280">Change Request ID</p>
@@ -158,21 +129,17 @@ def _cr_email_html(cr: dict, review_token: str, reviewer_type: str) -> str:
     </table>
 
     <p style="margin:28px 0 16px;font-size:14px;color:#374151">
-      As a <strong>{reviewer_type.replace("_"," ").title()}</strong>, please review and take action on this request:
+      As a <strong>{reviewer_label}</strong>, please log in to the HR Portal to review and take action on this request.
     </p>
 
     <table cellpadding="0" cellspacing="0"><tr>
-      <td style="padding-right:12px">
-        <a href="{approve_url}" style="display:inline-block;background:#16a34a;color:#ffffff;text-decoration:none;padding:14px 28px;border-radius:8px;font-weight:700;font-size:14px">Approve</a>
-      </td>
       <td>
-        <a href="{reject_url}" style="display:inline-block;background:#dc2626;color:#ffffff;text-decoration:none;padding:14px 28px;border-radius:8px;font-weight:700;font-size:14px">Reject</a>
+        <a href="{login_url}" style="display:inline-block;background:#002FA7;color:#ffffff;text-decoration:none;padding:14px 28px;border-radius:8px;font-weight:700;font-size:14px">Login to Portal</a>
       </td>
     </tr></table>
 
     <p style="margin:24px 0 0;font-size:12px;color:#9ca3af">
-      Clicking Approve or Reject will open a review page where you can add notes before confirming.<br>
-      This link is valid for <strong>7 days</strong>.
+      For security, approval/rejection can only be done after logging in to the portal.
     </p>
   </td></tr>
   <tr><td style="background:#f8fafc;padding:16px 32px;border-top:1px solid #e2e8f0">
@@ -180,6 +147,7 @@ def _cr_email_html(cr: dict, review_token: str, reviewer_type: str) -> str:
   </td></tr>
 </table></td></tr></table>
 </body></html>"""
+
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -301,7 +269,7 @@ async def get_current_user(request: Request) -> dict:
         if payload.get("type") != "access":
             raise HTTPException(status_code=401, detail="Invalid token type")
         user = await execute_query(
-            "SELECT id, email, name, role, department, position, avatar_url, casual_leave, sick_leave, loss_of_pay, permission_hours, half_day_leave, shift, basic_salary, employee_code, gps_tracking_enabled, timer_access_enabled FROM users WHERE id = %s",
+            "SELECT id, email, name, role, department, position, avatar_url, casual_leave, sick_leave, loss_of_pay, permission_hours, half_day_leave, shift, basic_salary, employee_code, gps_tracking_enabled, timer_access_enabled, reporting_manager_id FROM users WHERE id = %s",
             (int(payload["sub"]),), fetch_one=True
         )
         if not user:
@@ -570,7 +538,6 @@ class CRCreate(BaseModel):
     description: str
     cr_type: str = "General"
     priority: str = "medium"
-    assigned_manager_id: int
     metadata: Optional[dict] = None
 
 class CRUpdate(BaseModel):
@@ -2616,11 +2583,14 @@ async def get_birthdays_list(request: Request):
     for r in (rows or []):
         try:
             dob = datetime.strptime(r["date_of_birth"], "%Y-%m-%d").date()
+            next_bday = dob.replace(year=today.year)
         except (ValueError, TypeError):
             continue
-        next_bday = dob.replace(year=today.year)
         if next_bday < today:
-            next_bday = dob.replace(year=today.year + 1)
+            try:
+                next_bday = dob.replace(year=today.year + 1)
+            except ValueError:
+                next_bday = next_bday.replace(day=28, year=today.year + 1)
         days_until = (next_bday - today).days
         result.append({
             "id": str(r["id"]),
@@ -2635,6 +2605,54 @@ async def get_birthdays_list(request: Request):
         })
     result.sort(key=lambda x: x["days_until"])
     return result
+
+@app.get("/api/team-events")
+async def get_team_events(request: Request):
+    """Combined widget feed for dashboard overviews: upcoming birthdays, work anniversaries & new joiners."""
+    await get_current_user(request)
+    rows = await execute_query(
+        "SELECT id, name, department, avatar_url, employee_code, date_of_birth, created_at FROM users",
+        fetch_all=True
+    )
+    today = datetime.now(timezone.utc).date()
+    birthdays, anniversaries, new_joiners = [], [], []
+    for r in (rows or []):
+        base = {"id": str(r["id"]), "name": r["name"], "department": r["department"], "avatar_url": r["avatar_url"], "employee_code": r["employee_code"]}
+
+        if r.get("date_of_birth"):
+            try:
+                dob = datetime.strptime(r["date_of_birth"], "%Y-%m-%d").date()
+                next_bday = dob.replace(year=today.year)
+                if next_bday < today:
+                    next_bday = dob.replace(year=today.year + 1)
+                days_until = (next_bday - today).days
+                if days_until <= 30:
+                    birthdays.append({**base, "days_until": days_until})
+            except (ValueError, TypeError):
+                pass
+
+        if r.get("created_at"):
+            try:
+                joined = datetime.fromisoformat(str(r["created_at"])).date()
+                days_since_join = (today - joined).days
+                if 0 <= days_since_join <= 30:
+                    new_joiners.append({**base, "joined_date": joined.isoformat(), "days_since_join": days_since_join})
+
+                next_anniv = joined.replace(year=today.year)
+                if next_anniv < today:
+                    next_anniv = joined.replace(year=today.year + 1)
+                years = next_anniv.year - joined.year
+                days_until = (next_anniv - today).days
+                if years >= 1 and days_until <= 30:
+                    anniversaries.append({**base, "years": years, "days_until": days_until})
+            except (ValueError, TypeError):
+                pass
+
+    birthdays.sort(key=lambda x: x["days_until"])
+    anniversaries.sort(key=lambda x: x["days_until"])
+    new_joiners.sort(key=lambda x: x["days_since_join"])
+    return {"birthdays": birthdays, "anniversaries": anniversaries, "new_joiners": new_joiners}
+
 
 # ============== WFH ROUTES ==============
 
@@ -3033,16 +3051,29 @@ async def get_cr_managers(request: Request):
     )
     return [{"id": str(r["id"]), "name": r["name"], "email": r["email"], "role": r["role"], "department": r.get("department") or ""} for r in (rows or [])]
 
+@cr_router.get("/my-manager")
+async def get_my_reporting_manager(request: Request):
+    """Return the current user's reporting manager (CRs are always routed to them)."""
+    user = await get_current_user(request)
+    if not user.get("reporting_manager_id"):
+        return {"has_manager": False}
+    mgr = await execute_query("SELECT id, name, email, role FROM users WHERE id = %s", (user["reporting_manager_id"],), fetch_one=True)
+    if not mgr:
+        return {"has_manager": False}
+    return {"has_manager": True, "id": str(mgr["id"]), "name": mgr["name"], "email": mgr["email"], "role": mgr["role"]}
+
 @cr_router.post("/create")
 async def create_cr(data: CRCreate, request: Request):
     user = await get_current_user(request)
     now = datetime.now(timezone.utc).isoformat()
     metadata_json = json.dumps(data.metadata) if data.metadata else None
 
-    # Look up assigned manager
-    mgr = await execute_query("SELECT id, name, email, role FROM users WHERE id = %s AND is_cr_approver = 1", (data.assigned_manager_id,), fetch_one=True)
+    # A CR is always routed to the requester's own Reporting Manager (set by Admin)
+    if not user.get("reporting_manager_id"):
+        raise HTTPException(status_code=400, detail="No reporting manager assigned to you. Please contact Admin to set your reporting manager before submitting a change request.")
+    mgr = await execute_query("SELECT id, name, email, role FROM users WHERE id = %s", (user["reporting_manager_id"],), fetch_one=True)
     if not mgr:
-        raise HTTPException(status_code=400, detail="Invalid reporting manager selected")
+        raise HTTPException(status_code=400, detail="Your reporting manager account was not found. Please contact Admin.")
 
     # Generate unique CR number: CR-YYYY-NNNN
     year = datetime.now(timezone.utc).year
@@ -3053,7 +3084,7 @@ async def create_cr(data: CRCreate, request: Request):
     cr_id = await execute_query(
         """INSERT INTO change_requests (cr_number, requester_id, requester_name, title, description, cr_type, priority, status, manager_approval, admin_approval, assigned_manager_id, assigned_manager_name, metadata, created_at, updated_at)
            VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending', 'pending', 'pending', %s, %s, %s, %s, %s)""",
-        (cr_number, user["id"], user["name"], data.title, data.description, data.cr_type, data.priority, data.assigned_manager_id, mgr["name"], metadata_json, now, now),
+        (cr_number, user["id"], user["name"], data.title, data.description, data.cr_type, data.priority, mgr["id"], mgr["name"], metadata_json, now, now),
         last_id=True
     )
 
@@ -3063,16 +3094,14 @@ async def create_cr(data: CRCreate, request: Request):
         "cr_type": data.cr_type, "priority": data.priority
     }
 
-    # Send email ONLY to the selected manager
+    # Notify ONLY the requester's reporting manager — no action links, portal login required
     try:
-        mgr_token = _sign_review_token(cr_id, mgr["role"])
-        mgr_html = _cr_email_html(cr_row, mgr_token, "Manager")
-        subject = f"[{cr_number}] CR Approval Required: {data.title}"
+        mgr_html = _cr_email_html(cr_row, "Reporting Manager")
+        subject = f"[{cr_number}] New Change Request: {data.title}"
         asyncio.get_event_loop().run_in_executor(None, _send_email, [mgr["email"]], subject, mgr_html)
-        # Also send info-only copy to EXTRA_NOTIFICATION_EMAILS (no action buttons)
         for extra_email in EXTRA_NOTIFICATION_EMAILS:
             if extra_email != mgr["email"]:
-                extra_html = _cr_email_html(cr_row, mgr_token, "Notification")
+                extra_html = _cr_email_html(cr_row, "Notification")
                 asyncio.get_event_loop().run_in_executor(None, _send_email, [extra_email], f"[{cr_number}] New CR Submitted: {data.title}", extra_html)
     except Exception as e:
         logger.warning(f"CR email dispatch failed: {e}")
@@ -3115,158 +3144,6 @@ async def get_cr_types(request: Request):
     return CR_TYPES
 
 
-# ── Email Review Page (token-based, no login required) ─────────────────────────
-@cr_router.get("/review/{token}", response_class=HTMLResponse)
-async def cr_review_page(token: str, action: Optional[str] = None):
-    """Serve the HTML review page for Approve/Reject from email link."""
-    try:
-        cr_id, reviewer_type = _verify_review_token(token)
-    except HTTPException as e:
-        return HTMLResponse(_review_error_html(e.detail), status_code=400)
-    cr = await execute_query("SELECT * FROM change_requests WHERE id = %s", (cr_id,), fetch_one=True)
-    if not cr:
-        return HTMLResponse(_review_error_html("Change request not found."), status_code=404)
-    pre_action = action if action in ("approve", "reject") else None
-    return HTMLResponse(_review_page_html(cr, token, reviewer_type, pre_action))
-
-@cr_router.post("/review/{token}")
-async def cr_review_submit(token: str, request: Request):
-    """Process the review form submission (approve/reject + notes)."""
-    try:
-        cr_id, reviewer_type = _verify_review_token(token)
-    except HTTPException as e:
-        return HTMLResponse(_review_error_html(e.detail), status_code=400)
-    form = await request.form()
-    action = str(form.get("action", "")).strip()
-    notes = str(form.get("notes", "")).strip()
-    if action not in ("approve", "reject"):
-        return HTMLResponse(_review_error_html("Invalid action."), status_code=400)
-    cr = await execute_query("SELECT * FROM change_requests WHERE id = %s", (cr_id,), fetch_one=True)
-    if not cr:
-        return HTMLResponse(_review_error_html("Change request not found."), status_code=404)
-    now = datetime.now(timezone.utc).isoformat()
-    is_admin = reviewer_type == "admin"
-    if is_admin:
-        if cr.get("admin_approval") != "pending":
-            return HTMLResponse(_review_success_html(cr.get("cr_number",""), action, already_done=True))
-        new_status = "approved" if action == "approve" else "rejected"
-        await execute_query(
-            "UPDATE change_requests SET status=%s, admin_approval=%s, admin_notes=%s, admin_action_at=%s, updated_at=%s WHERE id=%s",
-            (new_status, action + "d", notes, now, now, cr_id)
-        )
-    else:
-        if cr.get("manager_approval") != "pending":
-            return HTMLResponse(_review_success_html(cr.get("cr_number",""), action, already_done=True))
-        new_status = "manager_approved" if action == "approve" else "rejected"
-        await execute_query(
-            "UPDATE change_requests SET status=%s, manager_approval=%s, manager_notes=%s, manager_action_at=%s, updated_at=%s WHERE id=%s",
-            (new_status, action + "d", notes, now, now, cr_id)
-        )
-        if action == "approve":
-            try:
-                cr_updated = await execute_query("SELECT * FROM change_requests WHERE id=%s", (cr_id,), fetch_one=True)
-                admins = await execute_query("SELECT email FROM users WHERE role='admin'", fetch_all=True)
-                import asyncio as _asyncio
-                for adm in (admins or []):
-                    adm_token = _sign_review_token(cr_id, "admin")
-                    html_body = _cr_email_html(cr_updated, adm_token, "Admin")
-                    subj = f"[{cr_updated.get('cr_number','CR')}] Manager Approved — Final Approval Needed: {cr_updated.get('title','')}"
-                    _asyncio.get_event_loop().run_in_executor(None, _send_email, [adm["email"]], subj, html_body)
-            except Exception as ex:
-                logger.warning(f"Admin email after manager-approve failed: {ex}")
-    return HTMLResponse(_review_success_html(cr.get("cr_number",""), action))
-
-def _review_page_html(cr: dict, token: str, reviewer_type: str, pre_action) -> str:
-    cr_num = cr.get("cr_number") or f"CR-{cr['id']}"
-    priority_color = {"high": "#dc2626", "medium": "#d97706", "low": "#16a34a"}.get(
-        (cr.get("priority") or "medium").lower(), "#d97706"
-    )
-    approve_checked = 'checked' if pre_action == "approve" else ''
-    reject_checked  = 'checked' if pre_action == "reject" else ''
-    reviewer_label = reviewer_type.replace("_", " ").title()
-    return f"""<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>CR Review — {cr_num}</title>
-<style>
-*{{box-sizing:border-box;margin:0;padding:0}}
-body{{font-family:Arial,sans-serif;background:#f4f6f9;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}}
-.card{{background:#fff;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.1);max-width:560px;width:100%;overflow:hidden}}
-.header{{background:#002FA7;padding:24px 32px;color:#fff}}
-.header h1{{font-size:18px;font-weight:700}}
-.header p{{font-size:13px;color:#93c5fd;margin-top:4px}}
-.body{{padding:28px 32px}}
-.cr-id{{font-size:13px;color:#6b7280;margin-bottom:4px}}
-.cr-title{{font-size:20px;font-weight:700;color:#002FA7;margin-bottom:16px}}
-.meta{{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;margin-bottom:20px}}
-.meta-label{{font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}}
-.meta-value{{font-size:14px;color:#374151;margin-bottom:12px;line-height:1.5}}
-.meta-value:last-child{{margin-bottom:0}}
-.badge{{display:inline-block;font-size:12px;font-weight:700;padding:3px 10px;border-radius:20px;background:#f1f5f9;color:{priority_color}}}
-.action-group{{display:flex;gap:12px;margin-bottom:16px}}
-.radio-btn{{flex:1;cursor:pointer}}
-.radio-btn input{{display:none}}
-.radio-btn .lbl{{display:block;padding:14px;border:2px solid #e2e8f0;border-radius:10px;text-align:center;font-weight:700;font-size:14px;transition:.2s}}
-.radio-btn input[value="approve"]+.lbl{{color:#16a34a}}
-.radio-btn input[value="reject"]+.lbl{{color:#dc2626}}
-.radio-btn input:checked[value="approve"]+.lbl{{border-color:#16a34a;background:#f0fdf4}}
-.radio-btn input:checked[value="reject"]+.lbl{{border-color:#dc2626;background:#fef2f2}}
-textarea{{width:100%;border:1px solid #d1d5db;border-radius:8px;padding:12px;font-size:14px;resize:vertical;min-height:90px;font-family:inherit;margin-bottom:16px}}
-textarea:focus{{outline:none;border-color:#002FA7;box-shadow:0 0 0 3px rgba(0,47,167,.1)}}
-button[type=submit]{{width:100%;background:#002FA7;color:#fff;border:none;padding:14px;border-radius:8px;font-size:15px;font-weight:700;cursor:pointer}}
-button[type=submit]:hover{{background:#001f7a}}
-.footer{{background:#f8fafc;border-top:1px solid #e2e8f0;padding:12px 32px;font-size:12px;color:#9ca3af}}
-</style></head>
-<body><div class="card">
-  <div class="header"><h1>Sparkcurv HR Portal</h1><p>Change Request Review — {reviewer_label}</p></div>
-  <div class="body">
-    <div class="cr-id">Change Request ID</div>
-    <div class="cr-title">{cr_num}</div>
-    <div class="meta">
-      <div class="meta-label">Title</div>
-      <div class="meta-value" style="font-weight:600;font-size:16px">{cr.get("title","")}</div>
-      <div class="meta-label">Description</div>
-      <div class="meta-value">{cr.get("description","")}</div>
-      <div style="display:flex;gap:32px">
-        <div><div class="meta-label">Type</div><div class="meta-value">{cr.get("cr_type","General")}</div></div>
-        <div><div class="meta-label">Priority</div><div class="meta-value"><span class="badge">{(cr.get("priority","medium")).upper()}</span></div></div>
-        <div><div class="meta-label">Submitted By</div><div class="meta-value">{cr.get("requester_name","")}</div></div>
-      </div>
-    </div>
-    <form method="POST" action="/api/cr/review/{token}">
-      <div class="meta-label" style="margin-bottom:8px">Your Decision</div>
-      <div class="action-group">
-        <label class="radio-btn"><input type="radio" name="action" value="approve" required {approve_checked}><span class="lbl">&#10003; Approve</span></label>
-        <label class="radio-btn"><input type="radio" name="action" value="reject" {reject_checked}><span class="lbl">&#10007; Reject</span></label>
-      </div>
-      <div class="meta-label" style="margin-bottom:8px">Notes <span style="font-weight:400;color:#9ca3af">(optional)</span></div>
-      <textarea name="notes" placeholder="Add your notes or reasons here..."></textarea>
-      <button type="submit">Confirm Decision</button>
-    </form>
-  </div>
-  <div class="footer">Sparkcurv HR Portal — Secure review link. Valid for 7 days.</div>
-</div></body></html>"""
-
-def _review_success_html(cr_num: str, action: str, already_done: bool = False) -> str:
-    color = "#16a34a" if action == "approve" else "#dc2626"
-    icon  = "&#10003;" if action == "approve" else "&#10007;"
-    label = "Approved" if action == "approve" else "Rejected"
-    msg   = "You have already acted on this request." if already_done else "Your decision has been recorded successfully."
-    return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Review Complete</title>
-<style>body{{font-family:Arial,sans-serif;background:#f4f6f9;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px}}
-.card{{background:#fff;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.1);max-width:440px;width:100%;padding:40px;text-align:center}}
-.icon{{font-size:56px;color:{color};margin-bottom:16px}}
-h2{{color:#111827;font-size:20px;margin-bottom:8px}}p{{color:#6b7280;font-size:14px}}</style></head>
-<body><div class="card"><div class="icon">{icon}</div><h2>{cr_num} — {label}</h2><p>{msg}</p></div></body></html>"""
-
-def _review_error_html(message: str) -> str:
-    return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>Review Error</title>
-<style>body{{font-family:Arial,sans-serif;background:#f4f6f9;display:flex;align-items:center;justify-content:center;min-height:100vh;padding:24px}}
-.card{{background:#fff;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.1);max-width:440px;width:100%;padding:40px;text-align:center}}
-.icon{{font-size:56px;color:#dc2626;margin-bottom:16px}}
-h2{{color:#111827;font-size:20px;margin-bottom:8px}}p{{color:#6b7280;font-size:14px}}</style></head>
-<body><div class="card"><div class="icon">&#9888;</div><h2>Review Link Error</h2><p>{message}</p></div></body></html>"""
-
-
 # Admin/Manager: list all CRs
 @admin_router.get("/change-requests")
 async def get_all_crs(request: Request):
@@ -3296,6 +3173,8 @@ async def manager_action_cr(cr_id: str, request: Request, action: str = "approve
     cr = await execute_query("SELECT * FROM change_requests WHERE id = %s", (int(cr_id),), fetch_one=True)
     if not cr:
         raise HTTPException(status_code=404, detail="CR not found")
+    if user["role"] != "admin" and cr["assigned_manager_id"] != user["id"]:
+        raise HTTPException(status_code=403, detail="This change request is not assigned to you")
     if cr["manager_approval"] != "pending":
         raise HTTPException(status_code=400, detail="Manager already acted on this CR")
 
@@ -3311,6 +3190,19 @@ async def manager_action_cr(cr_id: str, request: Request, action: str = "approve
         "UPDATE change_requests SET status = %s, manager_approval = %s, manager_id = %s, manager_name = %s, manager_notes = %s, manager_action_at = %s, updated_at = %s WHERE id = %s",
         (new_status, mgr_approval, user["id"], user["name"], notes, now, now, int(cr_id))
     )
+
+    # Notify admins for final approval — notify-only email, portal login required
+    if action == "approve":
+        try:
+            cr_updated = await execute_query("SELECT * FROM change_requests WHERE id = %s", (int(cr_id),), fetch_one=True)
+            admins = await execute_query("SELECT email FROM users WHERE role = 'admin'", fetch_all=True)
+            for adm in (admins or []):
+                html_body = _cr_email_html(cr_updated, "Admin")
+                subj = f"[{cr_updated.get('cr_number','CR')}] Manager Approved — Final Approval Needed: {cr_updated.get('title','')}"
+                asyncio.get_event_loop().run_in_executor(None, _send_email, [adm["email"]], subj, html_body)
+        except Exception as ex:
+            logger.warning(f"Admin email after manager-approve failed: {ex}")
+
     return {"message": f"CR {action}d by manager", "status": new_status}
 
 # Admin approval (step 2) with auto-apply

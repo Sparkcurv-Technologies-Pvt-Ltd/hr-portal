@@ -17,11 +17,12 @@ import {
   CaretDown, Hourglass, Warning, Timer, ChartBar, Receipt, DownloadSimple,
   CalendarStar, CurrencyCircleDollar, Scroll, Laptop, Trash, CurrencyDollar,
   GitPullRequest, Plus, Sun, Moon, TreeStructure, MapPin, WifiNone,
-  PlayCircle, StopCircle, CheckCircle
+  PlayCircle, StopCircle, CheckCircle, UserCircle
 } from "@phosphor-icons/react";
 import { OrgTreeView } from "../components/OrgTreeNode";
 import { TimeTrackerCard } from "../components/TimeTrackerCard";
 import { BirthdayWidget } from "../components/BirthdayWidget";
+import { TeamEventsWidget } from "../components/TeamEventsWidget";
 
 // Convert decimal hours (e.g., 8.57) to "Xh Ym" format
 const formatHours = (decimalHours) => {
@@ -78,9 +79,9 @@ export default function EmployeeDashboard() {
   const [salaryStructure, setSalaryStructure] = useState(null);
   const [myCRs, setMyCRs] = useState([]);
   const [crDialogOpen, setCrDialogOpen] = useState(false);
-  const [crForm, setCrForm] = useState({ title: "", description: "", cr_type: "General", priority: "medium", requested_value: "", manager_id: "" });
+  const [crForm, setCrForm] = useState({ title: "", description: "", cr_type: "General", priority: "medium", requested_value: "" });
   const [crTypes, setCrTypes] = useState([]);
-  const [crManagers, setCrManagers] = useState([]);
+  const [myManager, setMyManager] = useState(null);
   const [loading, setLoading] = useState(false);
   const [leaveDialogOpen, setLeaveDialogOpen] = useState(false);
   const [permissionDialogOpen, setPermissionDialogOpen] = useState(false);
@@ -139,8 +140,8 @@ export default function EmployeeDashboard() {
       // Fetch org chart & levels (non-critical)
       api.get("/admin/org-chart").then(r => setOrgNodes(r.data || [])).catch(() => {});
       api.get("/org-levels").then(r => setOrgLevels(r.data || [])).catch(() => {});
-      // Fetch managers list for CR submission
-      api.get("/cr/managers").then(r => setCrManagers(r.data || [])).catch(() => {});
+      // Fetch reporting manager for CR submission (CRs are always routed to them)
+      api.get("/cr/my-manager").then(r => setMyManager(r.data || { has_manager: false })).catch(() => {});
     } catch (error) {
       console.error("Error fetching data:", error);
     }
@@ -285,8 +286,8 @@ export default function EmployeeDashboard() {
       toast.error("Title and description are required");
       return;
     }
-    if (!crForm.manager_id) {
-      toast.error("Please select a reporting manager");
+    if (!myManager?.has_manager) {
+      toast.error("No reporting manager assigned. Contact Admin first.");
       return;
     }
     setLoading(true);
@@ -296,13 +297,12 @@ export default function EmployeeDashboard() {
         description: crForm.description,
         cr_type: crForm.cr_type,
         priority: crForm.priority,
-        assigned_manager_id: parseInt(crForm.manager_id),
         metadata: crForm.requested_value ? { requested_value: crForm.requested_value } : null
       };
       const res = await api.post("/cr/create", payload);
       toast.success(`Change request ${res.data.cr_number} submitted!`);
       setCrDialogOpen(false);
-      setCrForm({ title: "", description: "", cr_type: "General", priority: "medium", requested_value: "", manager_id: "" });
+      setCrForm({ title: "", description: "", cr_type: "General", priority: "medium", requested_value: "" });
       fetchData();
     } catch (error) {
       toast.error(error.response?.data?.detail || "Failed to submit CR");
@@ -493,6 +493,8 @@ export default function EmployeeDashboard() {
               </h1>
               <p className="text-slate-500 mt-1 text-sm">{format(new Date(), "EEEE, MMMM d, yyyy")}</p>
             </div>
+
+            <TeamEventsWidget api={api} />
 
             {/* Working Hours Alert */}
             {workingSummary && workingSummary.short_days_count > 0 && (
@@ -1272,31 +1274,23 @@ export default function EmployeeDashboard() {
                       />
                     </div>
                     <div className="space-y-2">
-                      <Label>Reporting Manager <span className="text-red-500">*</span></Label>
-                      <Select
-                        value={crForm.manager_id}
-                        onValueChange={(v) => setCrForm({ ...crForm, manager_id: v })}
-                      >
-                        <SelectTrigger data-testid="cr-manager-select">
-                          <SelectValue placeholder="Select who should approve this request" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {crManagers.length === 0 && (
-                            <SelectItem value="" disabled>No managers available</SelectItem>
-                          )}
-                          {crManagers.map((m) => (
-                            <SelectItem key={m.id} value={m.id}>
-                              <div className="flex flex-col">
-                                <span className="font-medium">{m.name}</span>
-                                <span className="text-xs text-slate-400">
-                                  {m.role === "devops_manager" ? "DevOps Manager" : m.role.charAt(0).toUpperCase() + m.role.slice(1)}
-                                  {m.department ? ` · ${m.department}` : ""}
-                                </span>
-                              </div>
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <Label>Reporting Manager</Label>
+                      {myManager?.has_manager ? (
+                        <div data-testid="cr-reporting-manager-display" className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-blue-50 border border-blue-100">
+                          <UserCircle className="h-5 w-5 text-[#002FA7]" weight="duotone" />
+                          <div>
+                            <p className="text-sm font-semibold text-slate-800">{myManager.name}</p>
+                            <p className="text-xs text-slate-400">
+                              {myManager.role === "devops_manager" ? "DevOps Manager" : myManager.role?.charAt(0).toUpperCase() + myManager.role?.slice(1)} · This request will only be visible to them
+                            </p>
+                          </div>
+                        </div>
+                      ) : (
+                        <div data-testid="cr-no-manager-warning" className="flex items-center gap-2 px-3 py-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-700 text-sm">
+                          <Warning className="h-4 w-4" weight="bold" />
+                          No reporting manager assigned yet. Contact Admin before submitting a request.
+                        </div>
+                      )}
                     </div>
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-2">

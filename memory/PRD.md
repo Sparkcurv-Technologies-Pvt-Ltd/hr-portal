@@ -125,6 +125,12 @@ Build an HR portal for all employees with Leave, Login, logout, break etc., fron
 - ✅ **Employee Birthdays / Calendar**: Added `date_of_birth` column to `users`, Date of Birth field in Admin's Add/Edit Employee dialogs, new `GET /api/birthdays/list` endpoint (sorted by days-until-next-birthday), and a new `BirthdayWidget.jsx` (Upcoming Birthdays list + month calendar with birthday dates highlighted) embedded in the "Calendar & Holidays" tab for Employee, Manager and Admin.
 - ✅ **Environment note**: Confirmed correct public URL is `https://attendance-hub-1369.preview.emergentagent.com` (not the `APP_URL` value baked into supervisor's backend env block, which was stale/mismatched). `frontend/.env` REACT_APP_BACKEND_URL and `backend/.env` FRONTEND_URL/BACKEND_URL corrected to this value.
 
+### Sep 2026 (cont. 3)
+- ✅ **CR visibility restricted to Reporting Manager**: Employees no longer pick a manager from a dropdown — CR is auto-routed to their `reporting_manager_id` (set by Admin). New `GET /cr/my-manager` endpoint powers a read-only "Reporting Manager" card in the CR submission form. Backend enforces 403 if a manager tries to act on a CR not assigned to them (`assigned_manager_id != user.id`). Verified: Manager1 (reporting mgr) sees 1 CR, Manager2 sees 0, Admin sees all.
+- ✅ **Removed email Approve/Reject links entirely**: Deleted `_sign_review_token`, `_verify_review_token`, `/cr/review/{token}` GET+POST routes and all review-page HTML helpers. `_cr_email_html` is now a notify-only template ("Login to Portal" CTA, no action buttons) — approval only possible after logging into the portal.
+- ✅ **Manager Notes on CR**: Added a small Notes dialog (`crManagerDialogOpen`) in Admin/Manager dashboard so Manager can type notes before Approve/Reject (previously `crActionNotes` state existed but had no input, always sent empty). Notes stored in `manager_notes`, visible to Admin in the CR table and via portal email notification trigger sent to Admin on manager-approve.
+- ✅ **Overview widgets — Birthdays / Work Anniversaries / Onboarding**: New `GET /api/team-events` endpoint (30-day window) + `TeamEventsWidget.jsx` (3-column card) embedded in both Employee Dashboard and Admin/Manager Overview tabs.
+
 ## Pending Items (Prioritized)
 
 ### P1 - High  

@@ -5,6 +5,7 @@ import { Button } from "../components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "../components/ui/dialog";
 import { Label } from "../components/ui/label";
 import { Input } from "../components/ui/input";
+import { Textarea } from "../components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { toast } from "sonner";
 import { format } from "date-fns";
@@ -21,6 +22,7 @@ import { OrgTreeNode, OrgTreeView } from "../components/OrgTreeNode";
 import { ResetPortalButton } from "../components/ResetPortalButton";
 import { TimeTrackerCard } from "../components/TimeTrackerCard";
 import { BirthdayWidget } from "../components/BirthdayWidget";
+import { TeamEventsWidget } from "../components/TeamEventsWidget";
 import { MapContainer, TileLayer, Marker, Popup, Circle } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -176,6 +178,10 @@ export default function AdminDashboard() {
   const [crApproveDialogOpen, setCrApproveDialogOpen] = useState(false);
   const [selectedCR, setSelectedCR] = useState(null);
   const [crApplyData, setCrApplyData] = useState({ notes: "", apply_value: "" });
+
+  // Manager CR action dialog (with notes, visible to admin later)
+  const [crManagerDialogOpen, setCrManagerDialogOpen] = useState(false);
+  const [crManagerTarget, setCrManagerTarget] = useState(null); // { id, action }
 
   // Salary components (configurable)
   const [salaryComponents, setSalaryComponents] = useState([]);
@@ -576,6 +582,19 @@ export default function AdminDashboard() {
     } catch (error) {
       toast.error(error.response?.data?.detail || `Failed to ${action} CR`);
     }
+  };
+
+  const openCRManagerDialog = (crId, action) => {
+    setCrManagerTarget({ id: crId, action });
+    setCrActionNotes("");
+    setCrManagerDialogOpen(true);
+  };
+
+  const confirmCRManagerAction = async () => {
+    if (!crManagerTarget) return;
+    await handleCRAction(crManagerTarget.id, "manager", crManagerTarget.action);
+    setCrManagerDialogOpen(false);
+    setCrManagerTarget(null);
   };
 
   const AUTO_APPLY_TYPES = ["Salary Revision", "Leave Adjustment", "Shift Change"];
@@ -1161,6 +1180,8 @@ export default function AdminDashboard() {
               <h1 className="text-3xl font-bold text-slate-900 font-['Outfit'] tracking-tight">Dashboard Overview</h1>
               <p className="text-slate-500 mt-1 text-sm">{format(new Date(), "EEEE, MMMM d, yyyy")}</p>
             </div>
+
+            <TeamEventsWidget api={api} />
 
             {/* Metrics Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5 mb-8">
@@ -2586,7 +2607,7 @@ export default function AdminDashboard() {
                                 <Button
                                   data-testid={`cr-mgr-approve-${cr.id}`}
                                   size="sm"
-                                  onClick={() => handleCRAction(cr.id, "manager", "approve")}
+                                  onClick={() => openCRManagerDialog(cr.id, "approve")}
                                   className="bg-[#00C853] hover:bg-green-600 text-white h-7 text-xs px-2"
                                 >
                                   <Check className="h-3 w-3 mr-1" /> Mgr
@@ -2595,7 +2616,7 @@ export default function AdminDashboard() {
                                   data-testid={`cr-mgr-reject-${cr.id}`}
                                   size="sm"
                                   variant="ghost"
-                                  onClick={() => handleCRAction(cr.id, "manager", "reject")}
+                                  onClick={() => openCRManagerDialog(cr.id, "reject")}
                                   className="text-red-500 hover:text-red-700 h-7 text-xs px-2"
                                 >
                                   <X className="h-3 w-3" />
@@ -3721,6 +3742,36 @@ export default function AdminDashboard() {
           onApplyDataChange={setCrApplyData}
           onConfirm={handleAdminApproveCR}
         />
+
+        {/* Manager CR Notes Dialog */}
+        <Dialog open={crManagerDialogOpen} onOpenChange={setCrManagerDialogOpen}>
+          <DialogContent className="max-w-md">
+            <DialogHeader>
+              <DialogTitle className="font-['Outfit']">
+                {crManagerTarget?.action === "approve" ? "Approve Change Request" : "Reject Change Request"}
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3 pt-2">
+              <div className="space-y-1.5">
+                <Label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Notes (visible to Admin)</Label>
+                <Textarea
+                  data-testid="cr-manager-notes-input"
+                  placeholder="Add your notes or reasons here..."
+                  value={crActionNotes}
+                  onChange={(e) => setCrActionNotes(e.target.value)}
+                  className="min-h-[90px] rounded-xl"
+                />
+              </div>
+              <Button
+                data-testid="cr-manager-confirm-btn"
+                onClick={confirmCRManagerAction}
+                className={`w-full rounded-xl ${crManagerTarget?.action === "approve" ? "bg-[#00C853] hover:bg-green-600 text-white" : "bg-red-500 hover:bg-red-600 text-white"}`}
+              >
+                {crManagerTarget?.action === "approve" ? "Confirm Approve" : "Confirm Reject"}
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
       </main>
     </div>
   );
