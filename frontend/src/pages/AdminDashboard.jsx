@@ -20,6 +20,7 @@ import { CRApproveDialog } from "../components/CRApproveDialog";
 import { OrgTreeNode, OrgTreeView } from "../components/OrgTreeNode";
 import { ResetPortalButton } from "../components/ResetPortalButton";
 import { TimeTrackerCard } from "../components/TimeTrackerCard";
+import { BirthdayWidget } from "../components/BirthdayWidget";
 import { MapContainer, TileLayer, Marker, Popup, Circle } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -123,7 +124,8 @@ export default function AdminDashboard() {
     department: "",
     position: "",
     role: "employee",
-    employee_code: ""
+    employee_code: "",
+    date_of_birth: ""
   });
 
   const [editForm, setEditForm] = useState({
@@ -135,7 +137,8 @@ export default function AdminDashboard() {
     permission_hours: 2,
     role: "employee",
     wfh_limit: null,
-    employee_code: ""
+    employee_code: "",
+    date_of_birth: ""
   });
   const [changeRequests, setChangeRequests] = useState([]);
   const [crActionNotes, setCrActionNotes] = useState("");
@@ -292,7 +295,7 @@ export default function AdminDashboard() {
       await api.post("/admin/employees", newEmployee);
       toast.success("Employee added successfully!");
       setAddEmployeeOpen(false);
-      setNewEmployee({ email: "", password: "", name: "", department: "", position: "", role: "employee", employee_code: "" });
+      setNewEmployee({ email: "", password: "", name: "", department: "", position: "", role: "employee", employee_code: "", date_of_birth: "" });
       fetchData();
     } catch (error) {
       toast.error(error.response?.data?.detail || "Failed to add employee");
@@ -304,9 +307,9 @@ export default function AdminDashboard() {
   const openAddEmployeeModal = async () => {
     try {
       const res = await api.get("/admin/next-employee-code");
-      setNewEmployee({ email: "", password: "", name: "", department: "", position: "", role: "employee", employee_code: res.data.next_code || "" });
+      setNewEmployee({ email: "", password: "", name: "", department: "", position: "", role: "employee", employee_code: res.data.next_code || "", date_of_birth: "" });
     } catch {
-      setNewEmployee({ email: "", password: "", name: "", department: "", position: "", role: "employee", employee_code: "" });
+      setNewEmployee({ email: "", password: "", name: "", department: "", position: "", role: "employee", employee_code: "", date_of_birth: "" });
     }
     setAddEmployeeOpen(true);
   };
@@ -671,7 +674,8 @@ export default function AdminDashboard() {
       role: employee.role || "employee",
       wfh_limit: employee.wfh_limit ?? null,
       employee_code: employee.employee_code || "",
-      reporting_manager_id: employee.reporting_manager_id ?? null
+      reporting_manager_id: employee.reporting_manager_id ?? null,
+      date_of_birth: employee.date_of_birth || ""
     });
     setEditEmployeeOpen(true);
   };
@@ -1376,6 +1380,15 @@ export default function AdminDashboard() {
                       </div>
                       <p className="text-[11px] text-slate-400">Leave blank to auto-assign next ID</p>
                     </div>
+                    <div className="space-y-2">
+                      <Label>Date of Birth (optional)</Label>
+                      <Input
+                        data-testid="new-employee-dob"
+                        type="date"
+                        value={newEmployee.date_of_birth}
+                        onChange={(e) => setNewEmployee({ ...newEmployee, date_of_birth: e.target.value })}
+                      />
+                    </div>
                     <Button
                       data-testid="submit-new-employee"
                       onClick={handleAddEmployee}
@@ -1686,6 +1699,15 @@ export default function AdminDashboard() {
                         Auto
                       </Button>
                     </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Date of Birth (optional)</Label>
+                    <Input
+                      data-testid="edit-employee-dob"
+                      type="date"
+                      value={editForm.date_of_birth || ""}
+                      onChange={(e) => setEditForm({ ...editForm, date_of_birth: e.target.value })}
+                    />
                   </div>
                   <Button
                     data-testid="save-employee-changes"
@@ -3146,9 +3168,11 @@ export default function AdminDashboard() {
         {activeTab === "holidays" && (
           <>
             <div className="mb-8">
-              <h1 className="text-3xl font-bold text-slate-900 font-['Outfit'] tracking-tight">Holiday List 2026</h1>
-              <p className="text-slate-500 mt-1 text-sm">Public holidays and weekly offs for all employees</p>
+              <h1 className="text-3xl font-bold text-slate-900 font-['Outfit'] tracking-tight">Calendar & Holidays</h1>
+              <p className="text-slate-500 mt-1 text-sm">Public holidays, weekly offs and team birthdays</p>
             </div>
+
+            <BirthdayWidget api={api} />
 
             {/* Weekend Info */}
             <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 mb-6">

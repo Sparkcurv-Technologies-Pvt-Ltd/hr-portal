@@ -476,6 +476,7 @@ class UserRegister(BaseModel):
     position: Optional[str] = "Employee"
     role: Optional[str] = "employee"
     employee_code: Optional[str] = None
+    date_of_birth: Optional[str] = None
 
 class UserLogin(BaseModel):
     email: EmailStr
@@ -500,6 +501,7 @@ class EmployeeUpdate(BaseModel):
     wfh_limit: Optional[int] = None
     employee_code: Optional[str] = None
     reporting_manager_id: Optional[int] = None
+    date_of_birth: Optional[str] = None
 
 class PermissionRequest(BaseModel):
     duration_minutes: int
@@ -747,6 +749,13 @@ async def clock_out(request: Request):
     if active_break:
         await execute_query("UPDATE breaks SET break_end = %s WHERE id = %s", (clock_out_time.isoformat(), active_break["id"]))
 
+    # End any active pause
+    active_pause = await execute_query(
+        "SELECT id FROM pauses WHERE attendance_id = %s AND pause_end IS NULL", (attendance["id"],), fetch_one=True
+    )
+    if active_pause:
+        await execute_query("UPDATE pauses SET pause_end = %s WHERE id = %s", (clock_out_time.isoformat(), active_pause["id"]))
+
     # Calculate total break minutes
     breaks_list = await execute_query(
         "SELECT break_start, break_end FROM breaks WHERE attendance_id = %s", (attendance["id"],), fetch_all=True
@@ -758,13 +767,20 @@ async def clock_out(request: Request):
             e = datetime.fromisoformat(brk["break_end"])
             total_break += (e - s).total_seconds() / 60
 
+    _, total_pause = await get_pause_data(attendance["id"])
+
     clock_in_time = datetime.fromisoformat(attendance["clock_in"])
     total_time_minutes = (clock_out_time - clock_in_time).total_seconds() / 60
-    # Only deduct break time that exceeds the allowed 30 min break
+    # Only deduct break time that exceeds the allowed 30 min break; pause time is fully excluded
     excess_break = max(0, total_break - MAX_BREAK_MINUTES)
-    working_minutes = total_time_minutes - excess_break
+    working_minutes = total_time_minutes - excess_break - total_pause
     working_hours = working_minutes / 60
     is_short_day = 1 if working_hours < REQUIRED_WORK_HOURS else 0
+
+    if working_hours < REQUIRED_WORK_HOURS:
+        shortfall_minutes = round((REQUIRED_WORK_HOURS * 60) - working_minutes)
+        shortfall_h, shortfall_m = divmod(max(0, shortfall_minutes), 60)
+        raise HTTPException(status_code=400, detail=f"Cannot clock out yet — {shortfall_h}h {shortfall_m}m more working time needed to complete the required {REQUIRED_WORK_HOURS}h workday (breaks & pauses excluded).")
 
     await execute_query(
         "UPDATE attendance SET clock_out = %s, total_break_minutes = %s, working_hours = %s, is_short_day = %s, clock_out_lat = %s, clock_out_lng = %s, clock_out_address = %s WHERE id = %s",
@@ -775,7 +791,7 @@ async def clock_out(request: Request):
         await check_and_deduct_half_day_leave(user["id"])
 
     breaks_formatted = [{"start": b["break_start"], "end": b["break_end"]} for b in (breaks_list or [])]
-    return {"id": str(attendance["id"]), "user_id": str(user["id"]), "user_name": user["name"], "date": today, "clock_in": attendance["clock_in"], "clock_out": clock_out_time.isoformat(), "breaks": breaks_formatted, "total_break_minutes": int(total_break), "working_hours": round(working_hours, 2), "is_short_day": bool(is_short_day), "clock_out_lat": lat, "clock_out_lng": lng, "clock_out_address": address}
+    return {"id": str(attendance["id"]), "user_id": str(user["id"]), "user_name": user["name"], "date": today, "clock_in": attendance["clock_in"], "clock_out": clock_out_time.isoformat(), "breaks": breaks_formatted, "total_break_minutes": int(total_break), "total_pause_minutes": int(total_pause), "working_hours": round(working_hours, 2), "is_short_day": bool(is_short_day), "clock_out_lat": lat, "clock_out_lng": lng, "clock_out_address": address}
 
 async def check_and_deduct_half_day_leave(user_id: int):
     now = datetime.now(timezone.utc)
@@ -830,6 +846,12 @@ async def start_break(request: Request):
     )
     if active:
         raise HTTPException(status_code=400, detail="Already on break")
+
+    active_pause = await execute_query(
+        "SELECT id FROM pauses WHERE attendance_id = %s AND pause_end IS NULL", (attendance["id"],), fetch_one=True
+    )
+    if active_pause:
+        raise HTTPException(status_code=400, detail="Cannot start a break while paused")
 
     total_break_used = attendance.get("total_break_minutes", 0) or 0
     if total_break_used >= MAX_BREAK_MINUTES:
@@ -896,6 +918,70 @@ async def end_break(request: Request):
     breaks_formatted = [{"start": b["break_start"], "end": b["break_end"]} for b in (breaks_list or [])]
     return {"message": "Break ended", "breaks": breaks_formatted, "total_break_minutes": int(total_break)}
 
+async def get_pause_data(attendance_id: int):
+    pauses_list = await execute_query("SELECT pause_start, pause_end FROM pauses WHERE attendance_id = %s", (attendance_id,), fetch_all=True)
+    total_pause = 0
+    for p in (pauses_list or []):
+        if p["pause_start"] and p["pause_end"]:
+            s = datetime.fromisoformat(p["pause_start"])
+            e = datetime.fromisoformat(p["pause_end"])
+            total_pause += (e - s).total_seconds() / 60
+    formatted = [{"start": p["pause_start"], "end": p["pause_end"]} for p in (pauses_list or [])]
+    return formatted, total_pause
+
+@attendance_router.post("/pause/start")
+async def start_pause(request: Request):
+    user = await get_current_user(request)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    attendance = await execute_query(
+        "SELECT * FROM attendance WHERE user_id = %s AND date = %s AND clock_out IS NULL", (user["id"], today), fetch_one=True
+    )
+    if not attendance:
+        raise HTTPException(status_code=400, detail="Not clocked in")
+
+    active_break = await execute_query(
+        "SELECT id FROM breaks WHERE attendance_id = %s AND break_end IS NULL", (attendance["id"],), fetch_one=True
+    )
+    if active_break:
+        raise HTTPException(status_code=400, detail="Cannot start a pause while on break")
+
+    active_pause = await execute_query(
+        "SELECT id FROM pauses WHERE attendance_id = %s AND pause_end IS NULL", (attendance["id"],), fetch_one=True
+    )
+    if active_pause:
+        raise HTTPException(status_code=400, detail="Already paused")
+
+    await execute_query(
+        "INSERT INTO pauses (attendance_id, pause_start) VALUES (%s, %s)",
+        (attendance["id"], datetime.now(timezone.utc).isoformat())
+    )
+
+    pauses_formatted, _ = await get_pause_data(attendance["id"])
+    return {"message": "Paused", "pauses": pauses_formatted}
+
+@attendance_router.post("/pause/end")
+async def end_pause(request: Request):
+    user = await get_current_user(request)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    attendance = await execute_query(
+        "SELECT * FROM attendance WHERE user_id = %s AND date = %s AND clock_out IS NULL", (user["id"], today), fetch_one=True
+    )
+    if not attendance:
+        raise HTTPException(status_code=400, detail="Not clocked in")
+
+    active_pause = await execute_query(
+        "SELECT id FROM pauses WHERE attendance_id = %s AND pause_end IS NULL", (attendance["id"],), fetch_one=True
+    )
+    if not active_pause:
+        raise HTTPException(status_code=400, detail="Not paused")
+
+    await execute_query("UPDATE pauses SET pause_end = %s WHERE id = %s", (datetime.now(timezone.utc).isoformat(), active_pause["id"]))
+
+    pauses_formatted, total_pause = await get_pause_data(attendance["id"])
+    return {"message": "Resumed", "pauses": pauses_formatted, "total_pause_minutes": int(total_pause)}
+
 @attendance_router.get("/status")
 async def get_attendance_status(request: Request):
     user = await get_current_user(request)
@@ -914,12 +1000,14 @@ async def get_attendance_status(request: Request):
     has_wfh_today = bool(wfh_today)
 
     if not attendance:
-        return {"clocked_in": False, "on_break": False, "attendance": None, "max_break_minutes": MAX_BREAK_MINUTES, "remaining_break_minutes": MAX_BREAK_MINUTES, "has_wfh_today": has_wfh_today}
+        return {"clocked_in": False, "on_break": False, "on_pause": False, "attendance": None, "max_break_minutes": MAX_BREAK_MINUTES, "remaining_break_minutes": MAX_BREAK_MINUTES, "has_wfh_today": has_wfh_today, "required_work_hours": REQUIRED_WORK_HOURS}
 
     breaks_list = await execute_query("SELECT break_start, break_end FROM breaks WHERE attendance_id = %s", (attendance["id"],), fetch_all=True)
     breaks_formatted = [{"start": b["break_start"], "end": b["break_end"]} for b in (breaks_list or [])]
+    pauses_formatted, total_pause = await get_pause_data(attendance["id"])
 
     on_break = any(b["end"] is None for b in breaks_formatted)
+    on_pause = any(p["end"] is None for p in pauses_formatted)
     total_break_used = attendance.get("total_break_minutes", 0) or 0
     remaining_break = max(0, MAX_BREAK_MINUTES - total_break_used)
 
@@ -930,12 +1018,14 @@ async def get_attendance_status(request: Request):
         "clock_in": attendance["clock_in"],
         "clock_out": attendance["clock_out"],
         "breaks": breaks_formatted,
+        "pauses": pauses_formatted,
         "total_break_minutes": total_break_used,
+        "total_pause_minutes": int(total_pause),
         "working_hours": attendance.get("working_hours"),
         "is_short_day": bool(attendance.get("is_short_day"))
     }
 
-    return {"clocked_in": attendance.get("clock_out") is None, "on_break": on_break, "attendance": att_data, "max_break_minutes": MAX_BREAK_MINUTES, "remaining_break_minutes": remaining_break, "has_wfh_today": has_wfh_today}
+    return {"clocked_in": attendance.get("clock_out") is None, "on_break": on_break, "on_pause": on_pause, "attendance": att_data, "max_break_minutes": MAX_BREAK_MINUTES, "remaining_break_minutes": remaining_break, "has_wfh_today": has_wfh_today, "required_work_hours": REQUIRED_WORK_HOURS}
 
 @attendance_router.get("/history")
 async def get_attendance_history(request: Request, limit: int = 30):
@@ -948,6 +1038,7 @@ async def get_attendance_history(request: Request, limit: int = 30):
     result = []
     for rec in (records or []):
         breaks_list = await execute_query("SELECT break_start, break_end FROM breaks WHERE attendance_id = %s", (rec["id"],), fetch_all=True)
+        pauses_formatted, total_pause = await get_pause_data(rec["id"])
         result.append({
             "user_id": str(rec["user_id"]),
             "user_name": rec["user_name"],
@@ -955,7 +1046,9 @@ async def get_attendance_history(request: Request, limit: int = 30):
             "clock_in": rec["clock_in"],
             "clock_out": rec["clock_out"],
             "breaks": [{"start": b["break_start"], "end": b["break_end"]} for b in (breaks_list or [])],
+            "pauses": pauses_formatted,
             "total_break_minutes": rec.get("total_break_minutes", 0),
+            "total_pause_minutes": int(total_pause),
             "working_hours": rec.get("working_hours"),
             "is_short_day": bool(rec.get("is_short_day"))
         })
@@ -1239,7 +1332,7 @@ async def cancel_leave_request(leave_id: str, request: Request):
 @admin_router.get("/employees")
 async def get_all_employees(request: Request):
     await require_admin_or_manager(request)
-    rows = await execute_query("SELECT id, email, name, role, department, position, avatar_url, created_at, casual_leave, sick_leave, loss_of_pay, permission_hours, half_day_leave, shift, basic_salary, employee_code, wfh_limit, gps_tracking_enabled, timer_access_enabled, reporting_manager_id, is_cr_approver FROM users ORDER BY created_at DESC", fetch_all=True)
+    rows = await execute_query("SELECT id, email, name, role, department, position, avatar_url, created_at, casual_leave, sick_leave, loss_of_pay, permission_hours, half_day_leave, shift, basic_salary, employee_code, wfh_limit, gps_tracking_enabled, timer_access_enabled, reporting_manager_id, is_cr_approver, date_of_birth FROM users ORDER BY created_at DESC", fetch_all=True)
     result = []
     for emp in (rows or []):
         e = dict(emp)
@@ -1290,13 +1383,13 @@ async def create_employee(user_data: UserRegister, request: Request):
         employee_code = f"SC{next_num}"
 
     user_id = await execute_query(
-        """INSERT INTO users (email, password_hash, name, role, department, position, avatar_url, created_at, casual_leave, sick_leave, loss_of_pay, permission_hours, half_day_leave, shift, employee_code, wfh_limit)
-           VALUES (%s, %s, %s, %s, %s, %s, '', %s, 12, 3, 0, %s, 0, '', %s, 4)""",
-        (email, hashed, user_data.name, role, user_data.department, user_data.position, datetime.now(timezone.utc).isoformat(), MONTHLY_PERMISSION_HOURS, employee_code),
+        """INSERT INTO users (email, password_hash, name, role, department, position, avatar_url, created_at, casual_leave, sick_leave, loss_of_pay, permission_hours, half_day_leave, shift, employee_code, wfh_limit, date_of_birth)
+           VALUES (%s, %s, %s, %s, %s, %s, '', %s, 12, 3, 0, %s, 0, '', %s, 4, %s)""",
+        (email, hashed, user_data.name, role, user_data.department, user_data.position, datetime.now(timezone.utc).isoformat(), MONTHLY_PERMISSION_HOURS, employee_code, user_data.date_of_birth),
         last_id=True
     )
 
-    return {"id": str(user_id), "email": email, "name": user_data.name, "role": role, "department": user_data.department, "position": user_data.position, "avatar_url": "", "casual_leave": None, "sick_leave": None, "loss_of_pay": 0, "permission_hours": MONTHLY_PERMISSION_HOURS, "half_day_leave": 0, "shift": "", "employee_code": employee_code, "wfh_limit": None}
+    return {"id": str(user_id), "email": email, "name": user_data.name, "role": role, "department": user_data.department, "position": user_data.position, "avatar_url": "", "casual_leave": None, "sick_leave": None, "loss_of_pay": 0, "permission_hours": MONTHLY_PERMISSION_HOURS, "half_day_leave": 0, "shift": "", "employee_code": employee_code, "wfh_limit": None, "date_of_birth": user_data.date_of_birth}
 
 @admin_router.put("/employees/{employee_id}")
 async def update_employee(employee_id: str, update_data: EmployeeUpdate, request: Request):
@@ -1322,7 +1415,7 @@ async def update_employee(employee_id: str, update_data: EmployeeUpdate, request
     values = list(update_dict.values()) + [int(employee_id)]
     await execute_query(f"UPDATE users SET {set_clause} WHERE id = %s", tuple(values))
 
-    emp = await execute_query("SELECT id, email, name, role, department, position, avatar_url, casual_leave, sick_leave, loss_of_pay, permission_hours, half_day_leave, shift, basic_salary, employee_code, wfh_limit, reporting_manager_id FROM users WHERE id = %s", (int(employee_id),), fetch_one=True)
+    emp = await execute_query("SELECT id, email, name, role, department, position, avatar_url, casual_leave, sick_leave, loss_of_pay, permission_hours, half_day_leave, shift, basic_salary, employee_code, wfh_limit, reporting_manager_id, date_of_birth FROM users WHERE id = %s", (int(employee_id),), fetch_one=True)
     if not emp:
         raise HTTPException(status_code=404, detail="Employee not found")
     emp["id"] = str(emp.pop("id"))
@@ -2511,6 +2604,38 @@ async def check_date(date: str):
     holiday = is_holiday(date)
     return {"date": date, "is_weekend": weekend, "is_holiday": holiday, "holiday_name": get_holiday_name(date) if holiday else "", "is_working_day": not weekend and not holiday}
 
+@app.get("/api/birthdays/list")
+async def get_birthdays_list(request: Request):
+    await get_current_user(request)
+    rows = await execute_query(
+        "SELECT id, name, department, avatar_url, employee_code, date_of_birth FROM users WHERE date_of_birth IS NOT NULL AND date_of_birth != ''",
+        fetch_all=True
+    )
+    today = datetime.now(timezone.utc).date()
+    result = []
+    for r in (rows or []):
+        try:
+            dob = datetime.strptime(r["date_of_birth"], "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            continue
+        next_bday = dob.replace(year=today.year)
+        if next_bday < today:
+            next_bday = dob.replace(year=today.year + 1)
+        days_until = (next_bday - today).days
+        result.append({
+            "id": str(r["id"]),
+            "name": r["name"],
+            "department": r["department"],
+            "avatar_url": r["avatar_url"],
+            "employee_code": r["employee_code"],
+            "date_of_birth": r["date_of_birth"],
+            "month": dob.month,
+            "day": dob.day,
+            "days_until": days_until
+        })
+    result.sort(key=lambda x: x["days_until"])
+    return result
+
 # ============== WFH ROUTES ==============
 
 @wfh_router.post("/request")
@@ -3577,6 +3702,15 @@ async def init_database():
                 )
             """)
             await cur.execute("""
+                CREATE TABLE IF NOT EXISTS pauses (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    attendance_id INT NOT NULL,
+                    pause_start VARCHAR(64),
+                    pause_end VARCHAR(64),
+                    INDEX idx_attendance (attendance_id)
+                )
+            """)
+            await cur.execute("""
                 CREATE TABLE IF NOT EXISTS leave_requests (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     user_id INT NOT NULL,
@@ -3940,6 +4074,16 @@ async def startup():
                 logger.info("Added is_cr_approver to users")
             except Exception as e:
                 logger.warning(f"Could not add is_cr_approver: {e}")
+
+        # Migration: Add date_of_birth to users
+        try:
+            await execute_query("SELECT date_of_birth FROM users LIMIT 1", fetch_one=True)
+        except Exception:
+            try:
+                await execute_query("ALTER TABLE users ADD COLUMN date_of_birth VARCHAR(20) DEFAULT NULL")
+                logger.info("Added date_of_birth to users")
+            except Exception as e:
+                logger.warning(f"Could not add date_of_birth: {e}")
 
         # Migration: Create salary_components table and seed defaults
         try:

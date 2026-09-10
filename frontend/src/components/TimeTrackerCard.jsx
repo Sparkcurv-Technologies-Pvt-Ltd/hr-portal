@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import {
   Clock, Coffee, SignOut, Warning, Laptop, MapPin, WifiNone,
-  Timer, PlayCircle, StopCircle
+  Timer, PlayCircle, StopCircle, Pause, Play
 } from "@phosphor-icons/react";
 
 const formatHours = (decimalHours) => {
@@ -12,12 +12,13 @@ const formatHours = (decimalHours) => {
   return `${hours}h ${minutes}m`;
 };
 
-// Reusable Clock In/Out + Break + Flexible Timer widget, used by Employee and Manager dashboards
+// Reusable Clock In/Out + Break + Pause(travel) + Flexible Timer widget, used by Employee and Manager dashboards
 export function TimeTrackerCard({ user, api }) {
-  const [attendanceStatus, setAttendanceStatus] = useState({ clocked_in: false, on_break: false, attendance: null });
+  const [attendanceStatus, setAttendanceStatus] = useState({ clocked_in: false, on_break: false, on_pause: false, attendance: null });
   const [myShift, setMyShift] = useState(null);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [breakElapsedTime, setBreakElapsedTime] = useState(0);
+  const [pauseElapsedTime, setPauseElapsedTime] = useState(0);
   const [gpsStatus, setGpsStatus] = useState(null);
   const [loading, setLoading] = useState(false);
   const [timerStatus, setTimerStatus] = useState({ is_running: false, total_seconds: 0, live_seconds: 0, sessions: [], target_seconds: 28800 });
@@ -101,11 +102,12 @@ export function TimeTrackerCard({ user, api }) {
 
   useEffect(() => {
     let interval;
-    if (attendanceStatus.clocked_in && attendanceStatus.attendance?.clock_in && !attendanceStatus.on_break) {
+    if (attendanceStatus.clocked_in && attendanceStatus.attendance?.clock_in && !attendanceStatus.on_break && !attendanceStatus.on_pause) {
       interval = setInterval(() => {
         const clockIn = new Date(attendanceStatus.attendance.clock_in);
         const breakMinutes = attendanceStatus.attendance?.total_break_minutes || 0;
-        const elapsed = Math.floor((Date.now() - clockIn.getTime()) / 1000) - (breakMinutes * 60);
+        const pauseMinutes = attendanceStatus.attendance?.total_pause_minutes || 0;
+        const elapsed = Math.floor((Date.now() - clockIn.getTime()) / 1000) - (breakMinutes * 60) - (pauseMinutes * 60);
         setElapsedTime(Math.max(0, elapsed));
       }, 1000);
     }
@@ -125,6 +127,23 @@ export function TimeTrackerCard({ user, api }) {
       }
     } else {
       setBreakElapsedTime(0);
+    }
+    return () => clearInterval(interval);
+  }, [attendanceStatus]);
+
+  useEffect(() => {
+    let interval;
+    if (attendanceStatus.on_pause && attendanceStatus.attendance?.pauses) {
+      const currentPause = attendanceStatus.attendance.pauses.find(p => !p.end);
+      if (currentPause) {
+        interval = setInterval(() => {
+          const pauseStart = new Date(currentPause.start);
+          const elapsed = Math.floor((Date.now() - pauseStart.getTime()) / 1000);
+          setPauseElapsedTime(elapsed);
+        }, 1000);
+      }
+    } else {
+      setPauseElapsedTime(0);
     }
     return () => clearInterval(interval);
   }, [attendanceStatus]);
@@ -192,11 +211,7 @@ export function TimeTrackerCard({ user, api }) {
       }
       const response = await api.post("/attendance/clock-out", location || {});
       const workingHours = response.data?.working_hours || 0;
-      if (workingHours < 8) {
-        toast.warning(`Clocked out with ${formatHours(workingHours)} (less than 8h required)`);
-      } else {
-        toast.success("Clocked out successfully!");
-      }
+      toast.success(`Clocked out successfully! (${formatHours(workingHours)} worked)`);
       fetchStatus();
     } catch (error) {
       toast.error(error.response?.data?.detail || error.message || "Failed to clock out");
@@ -241,8 +256,36 @@ export function TimeTrackerCard({ user, api }) {
     }
   };
 
+  const handleStartPause = async () => {
+    setLoading(true);
+    try {
+      await api.post("/attendance/pause/start", {});
+      toast.success("Paused — time won't count toward your 8h workday");
+      fetchStatus();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || error.message || "Failed to pause");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleEndPause = async () => {
+    setLoading(true);
+    try {
+      await api.post("/attendance/pause/end", {});
+      toast.success("Resumed working");
+      fetchStatus();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || error.message || "Failed to resume");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const currentWorkingHours = elapsedTime / 3600;
   const isShortDay = currentWorkingHours < 8 && attendanceStatus.clocked_in;
+  const onBreak = attendanceStatus.on_break;
+  const onPause = attendanceStatus.on_pause;
 
   return (
     <div data-testid="time-tracker-card" className="bg-white border border-slate-200 rounded-xl p-6" style={{ boxShadow: '0 1px 4px rgba(15,23,42,0.04)' }}>
@@ -263,22 +306,25 @@ export function TimeTrackerCard({ user, api }) {
       {/* Timer Display */}
       <div className="text-center mb-6">
         <div className={`text-5xl font-bold font-['JetBrains_Mono'] mb-2 ${
-          isShortDay && !attendanceStatus.on_break ? 'text-[#FF2E00]' : 'text-gray-900'
+          onPause ? 'text-[#0E7490]' : isShortDay && !onBreak ? 'text-[#FF2E00]' : 'text-gray-900'
         }`}>
-          {attendanceStatus.on_break ? formatTime(breakElapsedTime) : formatTime(elapsedTime)}
+          {onPause ? formatTime(pauseElapsedTime) : onBreak ? formatTime(breakElapsedTime) : formatTime(elapsedTime)}
         </div>
         <p className="text-sm text-gray-500 uppercase tracking-wider">
-          {attendanceStatus.on_break ? "Break Duration" : attendanceStatus.clocked_in ? "Working Time" : "Not Clocked In"}
+          {onPause ? "Paused (Travel/Away)" : onBreak ? "Break Duration" : attendanceStatus.clocked_in ? "Working Time" : "Not Clocked In"}
         </p>
-        {attendanceStatus.clocked_in && !attendanceStatus.on_break && (
+        {attendanceStatus.clocked_in && !onBreak && !onPause && (
           <p className={`text-xs mt-1 ${currentWorkingHours >= 8 ? 'text-[#00C853]' : 'text-[#FF2E00]'}`}>
             {currentWorkingHours >= 8 ? "Minimum 8h reached" : `Need ${formatHours(8 - currentWorkingHours)} more for minimum`}
           </p>
         )}
+        {onPause && (
+          <p className="text-xs mt-1 text-[#0E7490]">Paused time is excluded from your 8h requirement</p>
+        )}
       </div>
 
       {/* Progress Bar for 8.5 hours */}
-      {attendanceStatus.clocked_in && !attendanceStatus.on_break && (
+      {attendanceStatus.clocked_in && !onBreak && !onPause && (
         <div className="mb-6">
           <div className="flex justify-between text-xs text-gray-500 mb-1">
             <span>Progress</span>
@@ -345,34 +391,58 @@ export function TimeTrackerCard({ user, api }) {
           </div>
         ) : (
           <>
-            {!attendanceStatus.on_break ? (
-              <button
-                data-testid="manager-start-break-btn"
-                onClick={handleStartBreak}
-                disabled={loading || (attendanceStatus.remaining_break_minutes || 0) <= 0}
-                className={`btn-break ${(attendanceStatus.remaining_break_minutes || 0) <= 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
-              >
-                <Coffee className="inline h-5 w-5 mr-2" weight="bold" />
-                {(attendanceStatus.remaining_break_minutes || 0) <= 0
-                  ? "Break Limit Reached"
-                  : `Start Break (${attendanceStatus.remaining_break_minutes || 40} min left)`}
-              </button>
-            ) : (
-              <button
-                data-testid="manager-end-break-btn"
-                onClick={handleEndBreak}
-                disabled={loading}
-                className="btn-break"
-              >
-                <Coffee className="inline h-5 w-5 mr-2" weight="bold" />
-                End Break
-              </button>
-            )}
+            <div className="grid grid-cols-2 gap-2">
+              {!onBreak ? (
+                <button
+                  data-testid="manager-start-break-btn"
+                  onClick={handleStartBreak}
+                  disabled={loading || onPause || (attendanceStatus.remaining_break_minutes || 0) <= 0}
+                  className={`btn-break ${loading || onPause || (attendanceStatus.remaining_break_minutes || 0) <= 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  <Coffee className="inline h-4 w-4 mr-1" weight="bold" />
+                  {(attendanceStatus.remaining_break_minutes || 0) <= 0
+                    ? "Break Limit Reached"
+                    : `Break (${attendanceStatus.remaining_break_minutes || 40}m left)`}
+                </button>
+              ) : (
+                <button
+                  data-testid="manager-end-break-btn"
+                  onClick={handleEndBreak}
+                  disabled={loading}
+                  className="btn-break"
+                >
+                  <Coffee className="inline h-4 w-4 mr-1" weight="bold" />
+                  End Break
+                </button>
+              )}
+              {!onPause ? (
+                <button
+                  data-testid="pause-btn"
+                  onClick={handleStartPause}
+                  disabled={loading || onBreak}
+                  className={`btn-pause ${loading || onBreak ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  <Pause className="inline h-4 w-4 mr-1" weight="bold" />
+                  Pause
+                </button>
+              ) : (
+                <button
+                  data-testid="resume-btn"
+                  onClick={handleEndPause}
+                  disabled={loading}
+                  className="btn-pause"
+                >
+                  <Play className="inline h-4 w-4 mr-1" weight="bold" />
+                  Resume
+                </button>
+              )}
+            </div>
             <button
               data-testid="manager-clock-out-btn"
               onClick={handleClockOut}
-              disabled={loading}
-              className="btn-clock-out"
+              disabled={loading || onBreak || onPause}
+              className={`btn-clock-out ${loading || onBreak || onPause ? 'opacity-50 cursor-not-allowed' : ''}`}
+              title={onBreak ? "End your break first" : onPause ? "Resume first" : ""}
             >
               <SignOut className="inline h-5 w-5 mr-2" weight="bold" />
               Clock Out
@@ -403,6 +473,12 @@ export function TimeTrackerCard({ user, api }) {
               <p className="text-slate-400 text-xs font-medium mb-1">Break Time</p>
               <p className={`font-bold ${(attendanceStatus.attendance.total_break_minutes || 0) >= 40 ? 'text-red-500' : 'text-slate-900'}`}>
                 {attendanceStatus.attendance.total_break_minutes || 0} / 40 min
+              </p>
+            </div>
+            <div className="bg-slate-50 rounded-xl p-3">
+              <p className="text-slate-400 text-xs font-medium mb-1">Paused Time</p>
+              <p className="font-bold text-slate-900">
+                {attendanceStatus.attendance.total_pause_minutes || 0} min
               </p>
             </div>
           </div>
