@@ -1,7 +1,7 @@
 from dotenv import load_dotenv
 load_dotenv()
 
-from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, UploadFile, File
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, UploadFile, File, Form
 from fastapi.responses import StreamingResponse, HTMLResponse
 from starlette.middleware.cors import CORSMiddleware
 import aiomysql
@@ -310,6 +310,7 @@ holidays_router = APIRouter(prefix="/holidays")
 policy_router = APIRouter(prefix="/policy")
 wfh_router = APIRouter(prefix="/wfh")
 cr_router = APIRouter(prefix="/cr")
+finance_router = APIRouter(prefix="/finance")
 
 # Constants
 REQUIRED_WORK_HOURS = 8
@@ -3144,6 +3145,176 @@ async def get_cr_types(request: Request):
     return CR_TYPES
 
 
+# ── Income & Expense (Finance) — Admin only ─────────────────────────────────
+FINANCE_DEFAULT_CATEGORIES = [
+    ("Salary", "expense"), ("Rent", "expense"), ("Utilities", "expense"),
+    ("Office Supplies", "expense"), ("Travel", "expense"), ("Marketing", "expense"),
+    ("Software/Subscriptions", "expense"), ("Misc Expense", "expense"),
+    ("Sales", "income"), ("Service Revenue", "income"), ("Investment", "income"), ("Misc Income", "income"),
+]
+
+async def _save_receipt_db(data: bytes, filename: str, content_type: str) -> str:
+    media_id = _uuid.uuid4().hex
+    await execute_query(
+        "INSERT INTO media (media_id, filename, content_type, data) VALUES (%s, %s, %s, %s)",
+        (media_id, filename, content_type, data)
+    )
+    return media_id
+
+@finance_router.get("/categories")
+async def get_finance_categories(request: Request):
+    await require_admin(request)
+    rows = await execute_query("SELECT id, name, type FROM finance_categories ORDER BY type, name", fetch_all=True)
+    return [{"id": r["id"], "name": r["name"], "type": r["type"]} for r in (rows or [])]
+
+class FinanceCategoryCreate(BaseModel):
+    name: str
+    type: str  # income | expense
+
+@finance_router.post("/categories")
+async def add_finance_category(data: FinanceCategoryCreate, request: Request):
+    await require_admin(request)
+    if data.type not in ("income", "expense"):
+        raise HTTPException(status_code=400, detail="Type must be income or expense")
+    existing = await execute_query("SELECT id FROM finance_categories WHERE name = %s", (data.name.strip(),), fetch_one=True)
+    if existing:
+        raise HTTPException(status_code=400, detail="Category already exists")
+    cat_id = await execute_query(
+        "INSERT INTO finance_categories (name, type) VALUES (%s, %s)",
+        (data.name.strip(), data.type), last_id=True
+    )
+    return {"id": cat_id, "name": data.name.strip(), "type": data.type}
+
+@finance_router.get("/summary")
+async def get_finance_summary(request: Request, month: Optional[str] = None):
+    await require_admin(request)
+    query = "SELECT type, SUM(amount) as total FROM finance_entries"
+    params = []
+    if month:
+        query += " WHERE entry_date LIKE %s"
+        params.append(f"{month}%")
+    query += " GROUP BY type"
+    rows = await execute_query(query, tuple(params), fetch_all=True)
+    total_income = 0.0
+    total_expense = 0.0
+    for r in (rows or []):
+        if r["type"] == "income":
+            total_income = float(r["total"] or 0)
+        elif r["type"] == "expense":
+            total_expense = float(r["total"] or 0)
+    return {"total_income": total_income, "total_expense": total_expense, "net_balance": total_income - total_expense}
+
+@finance_router.get("/entries")
+async def get_finance_entries(request: Request, month: Optional[str] = None, type: Optional[str] = None):
+    await require_admin(request)
+    query = "SELECT * FROM finance_entries WHERE 1=1"
+    params = []
+    if month:
+        query += " AND entry_date LIKE %s"
+        params.append(f"{month}%")
+    if type in ("income", "expense"):
+        query += " AND type = %s"
+        params.append(type)
+    query += " ORDER BY entry_date DESC, id DESC"
+    rows = await execute_query(query, tuple(params), fetch_all=True)
+    result = []
+    for r in (rows or []):
+        d = dict(r)
+        d["id"] = str(d["id"])
+        d["amount"] = float(d["amount"])
+        d["receipt_url"] = f"/api/finance/receipts/{d['receipt_media_id']}" if d.get("receipt_media_id") else None
+        result.append(d)
+    return result
+
+@finance_router.post("/entries")
+async def create_finance_entry(
+    request: Request,
+    entry_date: str = Form(...),
+    type: str = Form(...),
+    category: str = Form(...),
+    amount: float = Form(...),
+    description: str = Form(""),
+    receipt: Optional[UploadFile] = File(None)
+):
+    user = await require_admin(request)
+    if type not in ("income", "expense"):
+        raise HTTPException(status_code=400, detail="Type must be income or expense")
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be greater than 0")
+
+    receipt_media_id = None
+    if receipt is not None and receipt.filename:
+        allowed_types = ["image/jpeg", "image/png", "image/webp", "application/pdf"]
+        if receipt.content_type not in allowed_types:
+            raise HTTPException(status_code=400, detail="Only JPEG, PNG, WebP or PDF receipts allowed")
+        contents = await receipt.read()
+        if len(contents) > 8 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="Receipt file must be under 8MB")
+        receipt_media_id = await _save_receipt_db(contents, receipt.filename, receipt.content_type)
+
+    now = datetime.now(timezone.utc).isoformat()
+    entry_id = await execute_query(
+        """INSERT INTO finance_entries (entry_date, type, category, amount, description, receipt_media_id, created_by, created_by_name, created_at, updated_at)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+        (entry_date, type, category, amount, description, receipt_media_id, user["id"], user["name"], now, now),
+        last_id=True
+    )
+    return {"id": str(entry_id), "message": "Entry added"}
+
+@finance_router.put("/entries/{entry_id}")
+async def update_finance_entry(
+    entry_id: str,
+    request: Request,
+    entry_date: str = Form(...),
+    type: str = Form(...),
+    category: str = Form(...),
+    amount: float = Form(...),
+    description: str = Form(""),
+    receipt: Optional[UploadFile] = File(None)
+):
+    await require_admin(request)
+    existing = await execute_query("SELECT * FROM finance_entries WHERE id = %s", (int(entry_id),), fetch_one=True)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    if type not in ("income", "expense"):
+        raise HTTPException(status_code=400, detail="Type must be income or expense")
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be greater than 0")
+
+    receipt_media_id = existing.get("receipt_media_id")
+    if receipt is not None and receipt.filename:
+        allowed_types = ["image/jpeg", "image/png", "image/webp", "application/pdf"]
+        if receipt.content_type not in allowed_types:
+            raise HTTPException(status_code=400, detail="Only JPEG, PNG, WebP or PDF receipts allowed")
+        contents = await receipt.read()
+        if len(contents) > 8 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="Receipt file must be under 8MB")
+        receipt_media_id = await _save_receipt_db(contents, receipt.filename, receipt.content_type)
+
+    now = datetime.now(timezone.utc).isoformat()
+    await execute_query(
+        "UPDATE finance_entries SET entry_date=%s, type=%s, category=%s, amount=%s, description=%s, receipt_media_id=%s, updated_at=%s WHERE id=%s",
+        (entry_date, type, category, amount, description, receipt_media_id, now, int(entry_id))
+    )
+    return {"message": "Entry updated"}
+
+@finance_router.delete("/entries/{entry_id}")
+async def delete_finance_entry(entry_id: str, request: Request):
+    await require_admin(request)
+    result = await execute_query("DELETE FROM finance_entries WHERE id = %s", (int(entry_id),))
+    if result == 0:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    return {"message": "Entry deleted"}
+
+@finance_router.get("/receipts/{media_id}")
+async def serve_finance_receipt(media_id: str, request: Request):
+    await require_admin(request)
+    try:
+        data, content_type = await _get_image_db(media_id)
+        return Response(content=data, media_type=content_type, headers={"Cache-Control": "private, max-age=86400"})
+    except Exception:
+        raise HTTPException(status_code=404, detail="Receipt not found")
+
 # Admin/Manager: list all CRs
 @admin_router.get("/change-requests")
 async def get_all_crs(request: Request):
@@ -3476,6 +3647,7 @@ api_router.include_router(holidays_router)
 api_router.include_router(policy_router)
 api_router.include_router(wfh_router)
 api_router.include_router(cr_router)
+api_router.include_router(finance_router)
 
 @api_router.get("/")
 async def root():
@@ -3785,6 +3957,35 @@ async def init_database():
                     data MEDIUMBLOB NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE KEY uk_media_id (media_id)
+                )
+            """)
+            await cur.execute("""
+                CREATE TABLE IF NOT EXISTS finance_categories (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    name VARCHAR(100) NOT NULL UNIQUE,
+                    type VARCHAR(10) NOT NULL
+                )
+            """)
+            await cur.execute("SELECT COUNT(*) as cnt FROM finance_categories")
+            row = await cur.fetchone()
+            if row and row[0] == 0:
+                for name, ftype in FINANCE_DEFAULT_CATEGORIES:
+                    await cur.execute("INSERT INTO finance_categories (name, type) VALUES (%s, %s)", (name, ftype))
+                logger.info("Seeded default finance categories")
+            await cur.execute("""
+                CREATE TABLE IF NOT EXISTS finance_entries (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    entry_date VARCHAR(20) NOT NULL,
+                    type VARCHAR(10) NOT NULL,
+                    category VARCHAR(100) NOT NULL,
+                    amount DECIMAL(12,2) NOT NULL,
+                    description TEXT,
+                    receipt_media_id VARCHAR(64) DEFAULT NULL,
+                    created_by INT NOT NULL,
+                    created_by_name VARCHAR(255),
+                    created_at VARCHAR(64) NOT NULL,
+                    updated_at VARCHAR(64) NOT NULL,
+                    INDEX idx_entry_date (entry_date)
                 )
             """)
 

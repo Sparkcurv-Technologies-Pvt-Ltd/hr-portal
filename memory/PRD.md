@@ -131,6 +131,10 @@ Build an HR portal for all employees with Leave, Login, logout, break etc., fron
 - ✅ **Manager Notes on CR**: Added a small Notes dialog (`crManagerDialogOpen`) in Admin/Manager dashboard so Manager can type notes before Approve/Reject (previously `crActionNotes` state existed but had no input, always sent empty). Notes stored in `manager_notes`, visible to Admin in the CR table and via portal email notification trigger sent to Admin on manager-approve.
 - ✅ **Overview widgets — Birthdays / Work Anniversaries / Onboarding**: New `GET /api/team-events` endpoint (30-day window) + `TeamEventsWidget.jsx` (3-column card) embedded in both Employee Dashboard and Admin/Manager Overview tabs.
 
+### Sep 2026 (cont. 4)
+- ✅ **Income & Expense module (Admin only)**: New `finance_entries` + `finance_categories` tables. Preset categories seeded (Salary, Rent, Utilities, Office Supplies, Travel, Marketing, Software/Subscriptions, Misc Expense, Sales, Service Revenue, Investment, Misc Income) + Admin can add custom ones. Entries support Date/Type/Category/Amount/Description + optional Receipt (image or PDF, stored as BLOB in `media` table, max 8MB). New tab "Income & Expense" (`adminOnly`) in Admin sidebar with Summary cards (Total Income/Expense/Net Balance), month filter, Add/Edit/Delete entries, "+ Category" dialog. All `/api/finance/*` endpoints gated by `require_admin` — verified Manager gets 403.
+- ✅ **Environment note**: MariaDB package + supervisor `[program:mariadb]` block get wiped on container/pod restarts (ephemeral OS layer) — only `/app` and `/etc/supervisor/conf.d` persist. If backend can't connect to MySQL after a restart, re-run `apt-get install -y mariadb-server` and `supervisorctl start mariadb` (data in `/app/mysql-data` itself persists fine).
+
 ## Pending Items (Prioritized)
 
 ### P1 - High  

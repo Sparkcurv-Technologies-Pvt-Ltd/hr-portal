@@ -14,7 +14,7 @@ import {
   UserPlus, Check, X, Trash, PencilSimple, Timer, Receipt, CurrencyDollar, DownloadSimple,
   ClockClockwise, FileXls, Key, CalendarStar, Camera, Scroll, Plus, PencilLine, TrashSimple, Laptop,
   GitPullRequest, MapPin, GearSix, NavigationArrow, Bell, Warning, Sun, Moon,
-  TreeStructure, ShieldCheck, WifiNone, WifiHigh, PlayCircle, StopCircle, DotsThreeVertical
+  TreeStructure, ShieldCheck, WifiNone, WifiHigh, PlayCircle, StopCircle, DotsThreeVertical, Wallet
 } from "@phosphor-icons/react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator } from "../components/ui/dropdown-menu";
 import { CRApproveDialog } from "../components/CRApproveDialog";
@@ -23,6 +23,7 @@ import { ResetPortalButton } from "../components/ResetPortalButton";
 import { TimeTrackerCard } from "../components/TimeTrackerCard";
 import { BirthdayWidget } from "../components/BirthdayWidget";
 import { TeamEventsWidget } from "../components/TeamEventsWidget";
+import { IncomeExpenseTab } from "../components/IncomeExpenseTab";
 import { MapContainer, TileLayer, Marker, Popup, Circle } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
@@ -1022,6 +1023,7 @@ export default function AdminDashboard() {
     { id: "my-attendance", label: "My Attendance", icon: ClockClockwise, managerOnly: true },
     { id: "employees", label: "Employees", icon: Users, adminOnly: true },
     { id: "payroll", label: "Payroll", icon: CurrencyDollar, adminOnly: true },
+    { id: "finance", label: "Income & Expense", icon: Wallet, adminOnly: true },
     { id: "change-requests", label: "Change Requests", icon: GitPullRequest },
     { id: "leaves", label: "Leave Requests", icon: CalendarCheck },
     { id: "wfh", label: "WFH Requests", icon: Laptop },
@@ -1171,6 +1173,11 @@ export default function AdminDashboard() {
               <TimeTrackerCard user={user} api={api} />
             </div>
           </>
+        )}
+
+        {/* Income & Expense Tab (Admin only) */}
+        {activeTab === "finance" && isAdmin && (
+          <IncomeExpenseTab api={api} />
         )}
 
         {/* Overview Tab */}
