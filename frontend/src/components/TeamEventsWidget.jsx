@@ -36,13 +36,13 @@ function EventColumn({ icon, iconBg, iconColor, title, items, emptyText, renderB
       ) : (
         <div className="space-y-2.5">
           {items.slice(0, 4).map((p) => (
-            <div key={p.id} className="flex items-center gap-2.5">
+            <div key={p.id} className="flex items-start gap-2.5">
               <Avatar person={p} />
               <div className="flex-1 min-w-0">
-                <p className="text-xs font-semibold text-slate-800 truncate">{p.name}</p>
+                <p className="text-xs font-semibold text-slate-800 break-words" data-testid={`event-full-name-${p.id}`}>{p.name}</p>
                 <p className="text-[11px] text-slate-400 truncate">{p.department}</p>
               </div>
-              {renderBadge(p)}
+              <span className="flex-shrink-0 mt-0.5">{renderBadge(p)}</span>
             </div>
           ))}
         </div>

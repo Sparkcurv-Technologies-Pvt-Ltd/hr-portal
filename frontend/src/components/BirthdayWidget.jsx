@@ -46,19 +46,19 @@ export function BirthdayWidget({ api }) {
               const src = getAvatarUrl(b.avatar_url);
               const isToday = b.days_until === 0;
               return (
-                <div key={b.id} className={`flex items-center gap-3 p-2.5 rounded-lg ${isToday ? 'bg-pink-50 border border-pink-200' : ''}`}>
+                <div key={b.id} className={`flex items-start gap-3 p-2.5 rounded-lg ${isToday ? 'bg-pink-50 border border-pink-200' : ''}`}>
                   {src ? (
-                    <img src={src} alt={b.name} className="h-9 w-9 rounded-full object-cover" />
+                    <img src={src} alt={b.name} className="h-9 w-9 rounded-full object-cover flex-shrink-0" />
                   ) : (
-                    <div className="h-9 w-9 rounded-full bg-[#002FA7] text-white flex items-center justify-center font-bold text-xs">
+                    <div className="h-9 w-9 rounded-full bg-[#002FA7] text-white flex items-center justify-center font-bold text-xs flex-shrink-0">
                       {getInitials(b.name)}
                     </div>
                   )}
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm font-semibold text-slate-900 truncate">{b.name}</p>
+                    <p className="text-sm font-semibold text-slate-900 break-words" data-testid={`birthday-full-name-${b.id}`}>{b.name}</p>
                     <p className="text-xs text-slate-400">{b.department}</p>
                   </div>
-                  <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${isToday ? 'bg-pink-500 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                  <span className={`text-xs font-bold px-2.5 py-1 rounded-full flex-shrink-0 mt-0.5 ${isToday ? 'bg-pink-500 text-white' : 'bg-slate-100 text-slate-500'}`}>
                     {isToday ? "Today! 🎉" : b.days_until === 1 ? "Tomorrow" : `in ${b.days_until}d`}
                   </span>
                 </div>

@@ -144,6 +144,8 @@ Build an HR portal for all employees with Leave, Login, logout, break etc., fron
   - `ManagerLeaveWfhTab.jsx` ("Team Leave & WFH") — approve/reject leave & WFH requests for their reports
 - ✅ **Team-scoping fix**: `/admin/leave-requests`, `/admin/permissions`, `/admin/wfh-requests`, `/admin/attendance` were scoped by `department` for Manager (inconsistent/inaccurate) — changed to scope by `reporting_manager_id` for consistency with the CR feature. Verified via curl: Manager1 sees only Test Employee's data, Manager2 sees none, Admin sees all.
 
+- ✅ **Full names in dashboard widgets**: `TeamEventsWidget.jsx` and `BirthdayWidget.jsx` name text changed from `truncate` (ellipsis) to `break-words` with `items-start` alignment so long full names (e.g. "Venkata Subramaniam Krishnamurthy") wrap and display completely instead of being cut off.
+
 ## Pending Items (Prioritized)
 
 ### P1 - High  
