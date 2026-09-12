@@ -22,7 +22,7 @@ const ProtectedRoute = ({ children, requireAdminOrManager = false }) => {
     return <Navigate to="/login" replace />;
   }
 
-  if (requireAdminOrManager && !["admin", "manager"].includes(user.role)) {
+  if (requireAdminOrManager && user.role !== "admin") {
     return <Navigate to="/dashboard" replace />;
   }
 
@@ -41,7 +41,7 @@ const PublicRoute = ({ children }) => {
   }
 
   if (user) {
-    return <Navigate to={["admin", "manager"].includes(user.role) ? "/admin" : "/dashboard"} replace />;
+    return <Navigate to={user.role === "admin" ? "/admin" : "/dashboard"} replace />;
   }
 
   return children;

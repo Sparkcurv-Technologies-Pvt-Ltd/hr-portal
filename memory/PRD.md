@@ -135,6 +135,15 @@ Build an HR portal for all employees with Leave, Login, logout, break etc., fron
 - ✅ **Income & Expense module (Admin only)**: New `finance_entries` + `finance_categories` tables. Preset categories seeded (Salary, Rent, Utilities, Office Supplies, Travel, Marketing, Software/Subscriptions, Misc Expense, Sales, Service Revenue, Investment, Misc Income) + Admin can add custom ones. Entries support Date/Type/Category/Amount/Description + optional Receipt (image or PDF, stored as BLOB in `media` table, max 8MB). New tab "Income & Expense" (`adminOnly`) in Admin sidebar with Summary cards (Total Income/Expense/Net Balance), month filter, Add/Edit/Delete entries, "+ Category" dialog. All `/api/finance/*` endpoints gated by `require_admin` — verified Manager gets 403.
 - ✅ **Environment note**: MariaDB package + supervisor `[program:mariadb]` block get wiped on container/pod restarts (ephemeral OS layer) — only `/app` and `/etc/supervisor/conf.d` persist. If backend can't connect to MySQL after a restart, re-run `apt-get install -y mariadb-server` and `supervisorctl start mariadb` (data in `/app/mysql-data` itself persists fine).
 
+### Sep 2026 (cont. 5)
+- ✅ **Manager fully migrated to Employee portal**: Manager & DevOps Manager now log into the same `/dashboard` (EmployeeDashboard.jsx) as Employees — `App.js` routing updated so only `admin` role goes to `/admin` (manager visiting `/admin` directly now redirects back to `/dashboard`, verified). AdminDashboard.jsx / `/admin` route is now Admin-exclusive (no more danger buttons/employee-management exposure to Manager).
+- ✅ **New "Manager Tools" sidebar section** (visible only if `role === manager|devops_manager`) with 4 new tabs, each a standalone component:
+  - `ManagerTeamTab.jsx` ("My Team") — direct reports list via new `GET /api/team/members`
+  - `ManagerRequestsTab.jsx` ("Team Requests") — CR approvals with Notes dialog (reuses `/admin/change-requests` + `/manager-action`, already scoped)
+  - `ManagerAttendanceTab.jsx` ("Team Attendance") — date-filterable team attendance table
+  - `ManagerLeaveWfhTab.jsx` ("Team Leave & WFH") — approve/reject leave & WFH requests for their reports
+- ✅ **Team-scoping fix**: `/admin/leave-requests`, `/admin/permissions`, `/admin/wfh-requests`, `/admin/attendance` were scoped by `department` for Manager (inconsistent/inaccurate) — changed to scope by `reporting_manager_id` for consistency with the CR feature. Verified via curl: Manager1 sees only Test Employee's data, Manager2 sees none, Admin sees all.
+
 ## Pending Items (Prioritized)
 
 ### P1 - High  

@@ -17,12 +17,16 @@ import {
   CaretDown, Hourglass, Warning, Timer, ChartBar, Receipt, DownloadSimple,
   CalendarStar, CurrencyCircleDollar, Scroll, Laptop, Trash, CurrencyDollar,
   GitPullRequest, Plus, Sun, Moon, TreeStructure, MapPin, WifiNone,
-  PlayCircle, StopCircle, CheckCircle, UserCircle
+  PlayCircle, StopCircle, CheckCircle, UserCircle, UsersThree
 } from "@phosphor-icons/react";
 import { OrgTreeView } from "../components/OrgTreeNode";
 import { TimeTrackerCard } from "../components/TimeTrackerCard";
 import { BirthdayWidget } from "../components/BirthdayWidget";
 import { TeamEventsWidget } from "../components/TeamEventsWidget";
+import { ManagerTeamTab } from "../components/ManagerTeamTab";
+import { ManagerRequestsTab } from "../components/ManagerRequestsTab";
+import { ManagerAttendanceTab } from "../components/ManagerAttendanceTab";
+import { ManagerLeaveWfhTab } from "../components/ManagerLeaveWfhTab";
 
 // Convert decimal hours (e.g., 8.57) to "Xh Ym" format
 const formatHours = (decimalHours) => {
@@ -339,6 +343,8 @@ export default function EmployeeDashboard() {
     return rolePermissions[key] === true;
   };
 
+  const isManagerRole = user?.role === "manager" || user?.role === "devops_manager";
+
   return (
     <div className="min-h-screen transition-colors duration-200" style={{ background: 'var(--bg-page)' }}>
       {/* Sidebar */}
@@ -440,6 +446,44 @@ export default function EmployeeDashboard() {
             <TreeStructure style={{ width: 18, height: 18 }} weight="duotone" />
             <span>Worker Tree</span>
           </button>
+
+          {isManagerRole && (
+            <>
+              <p className="px-3 pt-4 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">Manager Tools</p>
+              <button
+                data-testid="team-tab"
+                onClick={() => setActiveTab("team")}
+                className={activeTab === "team" ? "nav-item-active w-full" : "nav-item w-full"}
+              >
+                <UsersThree style={{ width: 18, height: 18 }} weight="duotone" />
+                <span>My Team</span>
+              </button>
+              <button
+                data-testid="team-requests-tab"
+                onClick={() => setActiveTab("team-requests")}
+                className={activeTab === "team-requests" ? "nav-item-active w-full" : "nav-item w-full"}
+              >
+                <GitPullRequest style={{ width: 18, height: 18 }} weight="duotone" />
+                <span>Team Requests</span>
+              </button>
+              <button
+                data-testid="team-attendance-tab"
+                onClick={() => setActiveTab("team-attendance")}
+                className={activeTab === "team-attendance" ? "nav-item-active w-full" : "nav-item w-full"}
+              >
+                <Clock style={{ width: 18, height: 18 }} weight="duotone" />
+                <span>Team Attendance</span>
+              </button>
+              <button
+                data-testid="team-leave-wfh-tab"
+                onClick={() => setActiveTab("team-leave-wfh")}
+                className={activeTab === "team-leave-wfh" ? "nav-item-active w-full" : "nav-item w-full"}
+              >
+                <CalendarCheck style={{ width: 18, height: 18 }} weight="duotone" />
+                <span>Team Leave & WFH</span>
+              </button>
+            </>
+          )}
         </nav>
 
         {/* User Info */}
@@ -1698,6 +1742,20 @@ export default function EmployeeDashboard() {
               <OrgTreeView nodes={orgNodes} levelLabels={orgLevels} />
             )}
           </>
+        )}
+
+        {/* Manager-only tabs */}
+        {activeTab === "team" && isManagerRole && (
+          <ManagerTeamTab api={api} />
+        )}
+        {activeTab === "team-requests" && isManagerRole && (
+          <ManagerRequestsTab api={api} />
+        )}
+        {activeTab === "team-attendance" && isManagerRole && (
+          <ManagerAttendanceTab api={api} />
+        )}
+        {activeTab === "team-leave-wfh" && isManagerRole && (
+          <ManagerLeaveWfhTab api={api} />
         )}
       </main>
     </div>

@@ -1693,10 +1693,10 @@ async def get_all_leave_requests(request: Request, status: Optional[str] = None)
     if status:
         conditions.append("status = %s")
         args.append(status)
-    # Managers only see leave requests from their department employees
-    if user["role"] == "manager":
-        conditions.append("user_id IN (SELECT id FROM users WHERE department = %s)")
-        args.append(user.get("department", ""))
+    # Managers only see leave requests from their direct reports
+    if user["role"] in ("manager", "devops_manager"):
+        conditions.append("user_id IN (SELECT id FROM users WHERE reporting_manager_id = %s)")
+        args.append(user["id"])
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
     query += " ORDER BY created_at DESC"
@@ -1738,12 +1738,18 @@ async def review_leave_request(leave_id: str, request: Request, action: str):
 
 @admin_router.get("/attendance")
 async def get_all_attendance(request: Request, date: Optional[str] = None):
-    await require_admin_or_manager(request)
+    user = await require_admin_or_manager(request)
     query = "SELECT * FROM attendance"
     args = []
+    conditions = []
     if date:
-        query += " WHERE date = %s"
+        conditions.append("date = %s")
         args.append(date)
+    if user["role"] in ("manager", "devops_manager"):
+        conditions.append("user_id IN (SELECT id FROM users WHERE reporting_manager_id = %s)")
+        args.append(user["id"])
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
     query += " ORDER BY date DESC LIMIT 1000"
     rows = await execute_query(query, tuple(args) if args else None, fetch_all=True)
 
@@ -1883,9 +1889,9 @@ async def get_all_permissions(request: Request, status: Optional[str] = None):
     if status:
         conditions.append("status = %s")
         args.append(status)
-    if user["role"] == "manager":
-        conditions.append("user_id IN (SELECT id FROM users WHERE department = %s)")
-        args.append(user.get("department", ""))
+    if user["role"] in ("manager", "devops_manager"):
+        conditions.append("user_id IN (SELECT id FROM users WHERE reporting_manager_id = %s)")
+        args.append(user["id"])
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
     query += " ORDER BY created_at DESC"
@@ -2607,6 +2613,18 @@ async def get_birthdays_list(request: Request):
     result.sort(key=lambda x: x["days_until"])
     return result
 
+@app.get("/api/team/members")
+async def get_team_members(request: Request):
+    """Returns the current manager's direct reports (for the Manager 'My Team' tab)."""
+    user = await require_admin_or_manager(request)
+    if user["role"] == "admin":
+        return []
+    rows = await execute_query(
+        "SELECT id, name, email, department, position, avatar_url, employee_code, role FROM users WHERE reporting_manager_id = %s ORDER BY name",
+        (user["id"],), fetch_all=True
+    )
+    return [{"id": str(r["id"]), "name": r["name"], "email": r["email"], "department": r["department"], "position": r["position"], "avatar_url": r["avatar_url"], "employee_code": r["employee_code"], "role": r["role"]} for r in (rows or [])]
+
 @app.get("/api/team-events")
 async def get_team_events(request: Request):
     """Combined widget feed for dashboard overviews: upcoming birthdays, work anniversaries & new joiners."""
@@ -2751,9 +2769,9 @@ async def get_all_wfh_requests(request: Request, status: Optional[str] = None):
     if status:
         conditions.append("status = %s")
         args.append(status)
-    if user["role"] == "manager":
-        conditions.append("user_id IN (SELECT id FROM users WHERE department = %s)")
-        args.append(user.get("department", ""))
+    if user["role"] in ("manager", "devops_manager"):
+        conditions.append("user_id IN (SELECT id FROM users WHERE reporting_manager_id = %s)")
+        args.append(user["id"])
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
     query += " ORDER BY created_at DESC"
