@@ -146,6 +146,12 @@ Build an HR portal for all employees with Leave, Login, logout, break etc., fron
 
 - ✅ **Full names in dashboard widgets**: `TeamEventsWidget.jsx` and `BirthdayWidget.jsx` name text changed from `truncate` (ellipsis) to `break-words` with `items-start` alignment so long full names (e.g. "Venkata Subramaniam Krishnamurthy") wrap and display completely instead of being cut off.
 
+### Sep 2026 (cont. 6)
+- ✅ **Fixed backend crash**: Previous session's `_payslip_scheduler_loop()`/`auto_generate_monthly_payslips()` were written but never started (no `asyncio.create_task` call in `startup()`), and a stale orphaned `mariadbd` process (holding the InnoDB file lock from a prior pod session) was blocking supervisor's MariaDB from starting. Killed the stale process, restarted `mariadb` + `backend` via supervisor. Backend is healthy (verified via curl 200 + clean logs).
+- ✅ **Auto Payslip Generation wired up**: Added `asyncio.create_task(_payslip_scheduler_loop())` to the FastAPI `startup()` event. Loop runs every 24h and generates the previous completed month's payslips for all salaried employees (idempotent — skips if already generated), so it effectively fires on/after the 1st of each month even if the pod restarted mid-month. Employee payslip PDF download button (`handleDownloadPayslip` in `EmployeeDashboard.jsx`) already existed from a prior session — verified working end-to-end via curl (set salary → generate → employee downloads valid PDF, 92KB, `%PDF-1.4` header confirmed).
+- ✅ **Income & Expense Excel Export**: New `GET /api/finance/export` endpoint (Admin only) using `openpyxl` — generates a styled `.xlsx` (dark header row, income/expense/net-balance totals row, auto-sized columns) filtered by month/type. New "Export Excel" button in `IncomeExpenseTab.jsx` (`data-testid="export-finance-excel-btn"`) downloads the file as a blob. Verified via curl: returns HTTP 200, valid XLSX (confirmed via zipfile inspection).
+- ⚠️ **Screenshot tool flakiness this session**: The `screenshot_tool` returned byte-for-byte identical (same MD5) cached/stale images across multiple different script runs against the live app — confirmed as a tool/session-level issue (a control screenshot of `example.com` worked fine and rendered fresh content). All new functionality in this session was instead verified end-to-end via `curl` (login with cookie-jar, salary update, payslip generation, PDF byte validation, Excel byte validation) per explicit user instruction to skip the testing agent. Recommend a fresh screenshot_tool attempt in the next session if visual confirmation is needed.
+
 ## Pending Items (Prioritized)
 
 ### P1 - High  
@@ -167,3 +173,5 @@ Build an HR portal for all employees with Leave, Login, logout, break etc., fron
 - Office: `GET/PUT /api/admin/office-settings` (supports `geofence_bypass` field)
 - Notifications: `GET /api/admin/notifications`
 - Heatmap: `GET /api/admin/attendance/heatmap`
+- Finance: `GET /api/finance/categories`, `GET/POST/PUT/DELETE /api/finance/entries`, `GET /api/finance/summary`, `GET /api/finance/export` (Excel, Admin only)
+- Payslip: `GET /api/payslip/my-payslips`, `GET /api/payslip/download/{id}` (PDF)

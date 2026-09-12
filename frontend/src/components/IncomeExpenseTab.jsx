@@ -8,7 +8,7 @@ import { Input } from "./ui/input";
 import { Textarea } from "./ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import {
-  TrendUp, TrendDown, Wallet, Plus, Paperclip, PencilSimple, TrashSimple, Tag, Receipt
+  TrendUp, TrendDown, Wallet, Plus, Paperclip, PencilSimple, TrashSimple, Tag, Receipt, FileXls
 } from "@phosphor-icons/react";
 
 const fmtMoney = (n) => `₹${Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
@@ -115,6 +115,23 @@ export function IncomeExpenseTab({ api }) {
 
   const filteredCategories = categories.filter((c) => c.type === form.type);
 
+  const handleExportExcel = async () => {
+    try {
+      const response = await api.get(`/finance/export?month=${month}`, { responseType: "blob" });
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute("download", `income_expense_${month}.xlsx`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      toast.success("Excel sheet downloaded!");
+    } catch (error) {
+      toast.error("Failed to export Excel sheet");
+    }
+  };
+
   return (
     <div data-testid="finance-tab">
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
@@ -130,6 +147,9 @@ export function IncomeExpenseTab({ api }) {
             onChange={(e) => setMonth(e.target.value)}
             className="w-40"
           />
+          <Button data-testid="export-finance-excel-btn" variant="outline" onClick={handleExportExcel}>
+            <FileXls className="h-4 w-4 mr-1.5" /> Export Excel
+          </Button>
           <Button data-testid="add-finance-category-btn" variant="outline" onClick={() => setCategoryDialogOpen(true)}>
             <Tag className="h-4 w-4 mr-1.5" /> Category
           </Button>

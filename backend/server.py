@@ -2851,22 +2851,21 @@ async def toggle_deduction(deduction_id: str, request: Request):
     return {"is_active": bool(new_status)}
 
 # Bulk Payroll Processing
-@admin_router.post("/payroll/process")
-async def process_bulk_payroll(data: BulkPayrollGenerate, request: Request):
-    admin = await require_admin(request)
+MONTH_NAMES = ["", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
+
+async def _run_bulk_payroll(month: int, year: int, processed_by_name: str) -> dict:
+    """Generates payslips for all salaried non-admin employees for the given month/year. Idempotent (skips existing)."""
     employees = await execute_query(
         "SELECT * FROM users WHERE role != 'admin' AND basic_salary > 0", fetch_all=True
     )
-    if not employees:
-        raise HTTPException(status_code=400, detail="No employees with salary set")
-
-    month_names = ["", "January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
     results = {"generated": 0, "skipped": 0, "errors": [], "total_gross": 0, "total_deductions": 0, "total_net": 0}
+    if not employees:
+        return results
 
     for employee in employees:
         try:
             existing = await execute_query("SELECT id FROM payslips WHERE employee_id = %s AND month = %s AND year = %s",
-                (employee["id"], data.month, data.year), fetch_one=True)
+                (employee["id"], month, year), fetch_one=True)
             if existing:
                 results["skipped"] += 1
                 continue
@@ -2874,8 +2873,8 @@ async def process_bulk_payroll(data: BulkPayrollGenerate, request: Request):
             basic_salary = employee.get("basic_salary", 0) or 0
             deductions = []
             total_deductions = 0
-            month_start = datetime(data.year, data.month, 1, tzinfo=timezone.utc)
-            month_end = datetime(data.year + 1, 1, 1, tzinfo=timezone.utc) if data.month == 12 else datetime(data.year, data.month + 1, 1, tzinfo=timezone.utc)
+            month_start = datetime(year, month, 1, tzinfo=timezone.utc)
+            month_end = datetime(year + 1, 1, 1, tzinfo=timezone.utc) if month == 12 else datetime(year, month + 1, 1, tzinfo=timezone.utc)
             per_day_salary = basic_salary / WORKING_DAYS_PER_MONTH
             half_day_salary = per_day_salary / 2
 
@@ -2921,9 +2920,9 @@ async def process_bulk_payroll(data: BulkPayrollGenerate, request: Request):
                 """INSERT INTO payslips (employee_id, employee_name, employee_email, department, position, month, year, month_name, basic_salary, deduction_details, total_deductions, net_pay, generated_by, created_at)
                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                 (employee["id"], employee["name"], employee.get("email", ""), employee.get("department", ""),
-                 employee.get("position", ""), data.month, data.year, month_names[data.month],
+                 employee.get("position", ""), month, year, MONTH_NAMES[month],
                  basic_salary, json.dumps(deductions), round(total_deductions, 2), round(net_pay, 2),
-                 admin["name"], datetime.now(timezone.utc).isoformat()),
+                 processed_by_name, datetime.now(timezone.utc).isoformat()),
                 last_id=True
             )
             results["generated"] += 1
@@ -2939,13 +2938,37 @@ async def process_bulk_payroll(data: BulkPayrollGenerate, request: Request):
             """INSERT INTO payroll_runs (month, year, total_employees, total_gross, total_deductions, total_net, processed_by, processed_at)
                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                ON DUPLICATE KEY UPDATE total_employees=%s, total_gross=%s, total_deductions=%s, total_net=%s, processed_by=%s, processed_at=%s""",
-            (data.month, data.year, results["generated"], round(results["total_gross"], 2), round(results["total_deductions"], 2), round(results["total_net"], 2), admin["name"], datetime.now(timezone.utc).isoformat(),
-             results["generated"], round(results["total_gross"], 2), round(results["total_deductions"], 2), round(results["total_net"], 2), admin["name"], datetime.now(timezone.utc).isoformat())
+            (month, year, results["generated"], round(results["total_gross"], 2), round(results["total_deductions"], 2), round(results["total_net"], 2), processed_by_name, datetime.now(timezone.utc).isoformat(),
+             results["generated"], round(results["total_gross"], 2), round(results["total_deductions"], 2), round(results["total_net"], 2), processed_by_name, datetime.now(timezone.utc).isoformat())
         )
     except Exception:
         pass
 
     return results
+
+async def auto_generate_monthly_payslips():
+    """Runs daily; generates payslips for the previous completed month for all salaried employees. Safe to re-run (skips existing)."""
+    today = datetime.now(timezone.utc)
+    if today.month == 1:
+        target_month, target_year = 12, today.year - 1
+    else:
+        target_month, target_year = today.month - 1, today.year
+    results = await _run_bulk_payroll(target_month, target_year, "Auto-Generated")
+    if results["generated"] > 0:
+        logger.info(f"Auto-generated {results['generated']} payslip(s) for {MONTH_NAMES[target_month]} {target_year}")
+
+async def _payslip_scheduler_loop():
+    while True:
+        try:
+            await auto_generate_monthly_payslips()
+        except Exception as e:
+            logger.warning(f"Auto payslip scheduler error: {e}")
+        await asyncio.sleep(24 * 60 * 60)
+
+@admin_router.post("/payroll/process")
+async def process_bulk_payroll(data: BulkPayrollGenerate, request: Request):
+    admin = await require_admin(request)
+    return await _run_bulk_payroll(data.month, data.year, admin["name"])
 
 # Also update single payslip generation to include custom deductions
 # Payroll Analytics
@@ -3323,6 +3346,69 @@ async def delete_finance_entry(entry_id: str, request: Request):
     if result == 0:
         raise HTTPException(status_code=404, detail="Entry not found")
     return {"message": "Entry deleted"}
+
+@finance_router.get("/export")
+async def export_finance_entries(request: Request, month: Optional[str] = None, type: Optional[str] = None):
+    await require_admin(request)
+    query = "SELECT * FROM finance_entries WHERE 1=1"
+    params = []
+    if month:
+        query += " AND entry_date LIKE %s"
+        params.append(f"{month}%")
+    if type in ("income", "expense"):
+        query += " AND type = %s"
+        params.append(type)
+    query += " ORDER BY entry_date DESC, id DESC"
+    rows = await execute_query(query, tuple(params), fetch_all=True)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Income & Expense"
+    headers = ["Date", "Type", "Category", "Amount", "Description", "Added By", "Created At"]
+    ws.append(headers)
+    header_fill = PatternFill(start_color="1F2937", end_color="1F2937", fill_type="solid")
+    header_font = Font(color="FFFFFF", bold=True)
+    for col_num, _ in enumerate(headers, start=1):
+        cell = ws.cell(row=1, column=col_num)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center")
+
+    total_income = 0.0
+    total_expense = 0.0
+    for r in (rows or []):
+        amount = float(r["amount"] or 0)
+        if r["type"] == "income":
+            total_income += amount
+        else:
+            total_expense += amount
+        ws.append([
+            r.get("entry_date", ""),
+            r.get("type", "").capitalize(),
+            r.get("category", ""),
+            amount,
+            r.get("description", "") or "",
+            r.get("created_by_name", "") or "",
+            r.get("created_at", "") or "",
+        ])
+
+    ws.append([])
+    ws.append(["", "", "Total Income", total_income])
+    ws.append(["", "", "Total Expense", total_expense])
+    ws.append(["", "", "Net Balance", total_income - total_expense])
+
+    for col_letter, width in [("A", 14), ("B", 12), ("C", 22), ("D", 14), ("E", 32), ("F", 20), ("G", 24)]:
+        ws.column_dimensions[col_letter].width = width
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+    filename = f"income_expense_{month or 'all'}.xlsx"
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
 
 @finance_router.get("/receipts/{media_id}")
 async def serve_finance_receipt(media_id: str, request: Request):
@@ -4327,6 +4413,9 @@ async def startup():
                     (title, category, content, icon, order, now, now)
                 )
             logger.info("Default company policies seeded")
+
+        asyncio.create_task(_payslip_scheduler_loop())
+        logger.info("Payslip auto-generation scheduler started (runs daily, generates previous month's payslips on/after the 1st)")
 
     except Exception as e:
         logger.error(f"STARTUP ERROR: {str(e)}")
