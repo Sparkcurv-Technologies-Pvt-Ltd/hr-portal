@@ -352,7 +352,7 @@ export default function EmployeeDashboard() {
     return rolePermissions[key] === true;
   };
 
-  const isManagerRole = user?.role === "manager" || user?.role === "devops_manager";
+  const isManagerRole = user?.role === "manager";
 
   return (
     <div className="min-h-screen transition-colors duration-200" style={{ background: 'var(--bg-page)' }}>
@@ -1385,7 +1385,7 @@ export default function EmployeeDashboard() {
                           <div>
                             <p className="text-sm font-semibold text-slate-800">{myManager.name}</p>
                             <p className="text-xs text-slate-400">
-                              {myManager.role === "devops_manager" ? "DevOps Manager" : myManager.role?.charAt(0).toUpperCase() + myManager.role?.slice(1)} · This request will only be visible to them
+                              {myManager.role?.charAt(0).toUpperCase() + myManager.role?.slice(1)} · This request will only be visible to them
                             </p>
                           </div>
                         </div>

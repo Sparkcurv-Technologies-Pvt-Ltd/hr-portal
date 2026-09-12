@@ -181,7 +181,7 @@ export default function AdminDashboard() {
   const [levelsForm, setLevelsForm] = useState([]);
 
   // Role permissions
-  const [rolePerms, setRolePerms] = useState({ manager: {}, devops_manager: {}, employee: {} });
+  const [rolePerms, setRolePerms] = useState({ manager: {}, employee: {} });
   const [rolePermsLoading, setRolePermsLoading] = useState(false);
 
   // CR approve dialog
@@ -243,11 +243,11 @@ export default function AdminDashboard() {
         // Also fetch org chart and role permissions for admin
         api.get("/admin/org-chart").then(r => setOrgNodes(r.data)).catch(() => {});
         api.get("/org-levels").then(r => setOrgLevels(r.data || [])).catch(() => {});
-        api.get("/admin/role-permissions").then(r => setRolePerms({ manager: {}, devops_manager: {}, employee: {}, ...(r.data || {}) })).catch(() => {});
+        api.get("/admin/role-permissions").then(r => setRolePerms({ manager: {}, employee: {}, ...(r.data || {}) })).catch(() => {});
         api.get("/admin/salary-components").then(r => { setSalaryComponents(r.data || []); setComponentsForm(r.data || []); }).catch(() => {});
       }
       // Fetch managers list for reporting manager dropdown
-      const mgrs = (results[1].data || []).filter(e => ["manager", "devops_manager", "admin"].includes(e.role));
+      const mgrs = (results[1].data || []).filter(e => ["manager", "admin"].includes(e.role));
       setManagers(mgrs);
     } catch (error) {
       console.error("Error fetching data:", error);
@@ -1025,7 +1025,7 @@ export default function AdminDashboard() {
   ];
 
   const isAdmin = user?.role === "admin";
-  const isManager = ["manager", "devops_manager"].includes(user?.role);
+  const isManager = ["manager"].includes(user?.role);
 
   const allNavItems = [
     { id: "overview", label: "Overview", icon: House },
@@ -1048,7 +1048,7 @@ export default function AdminDashboard() {
     if (item.managerOnly) return isManager;
     if (item.adminOnly) return isAdmin;
     if (isAdmin) return true;
-    // For manager/devops_manager, apply role-based access control
+    // For manager, apply role-based access control
     if (isManager) return rolePerms[user?.role]?.[item.id] !== false;
     return true;
   });
@@ -1447,7 +1447,6 @@ export default function AdminDashboard() {
                         <SelectContent>
                           <SelectItem value="employee">Employee</SelectItem>
                           <SelectItem value="manager">Manager</SelectItem>
-                          <SelectItem value="devops_manager">DevOps Manager</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
@@ -1563,10 +1562,9 @@ export default function AdminDashboard() {
                         <span className={`px-2.5 py-1 rounded-full text-xs font-bold uppercase ${
                           emp.role === "admin" ? "bg-blue-50 text-[#002FA7] border border-blue-100"
                           : emp.role === "manager" ? "bg-orange-50 text-orange-700 border border-orange-100"
-                          : emp.role === "devops_manager" ? "bg-purple-50 text-purple-700 border border-purple-100"
                           : "bg-slate-100 text-slate-600"
                         }`}>
-                          {emp.role === "devops_manager" ? "DevOps Mgr" : emp.role}
+                          {emp.role}
                         </span>
                       </td>
                       <td className="table-cell">
@@ -1749,7 +1747,6 @@ export default function AdminDashboard() {
                       <SelectContent>
                         <SelectItem value="employee">Employee</SelectItem>
                         <SelectItem value="manager">Manager</SelectItem>
-                        <SelectItem value="devops_manager">DevOps Manager</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -1766,7 +1763,7 @@ export default function AdminDashboard() {
                         <SelectItem value="none">— None —</SelectItem>
                         {managers.filter(m => m.id !== selectedEmployee?.id).map(m => (
                           <SelectItem key={m.id} value={String(m.id)}>
-                            {m.name} ({m.role === "devops_manager" ? "DevOps Mgr" : m.role.charAt(0).toUpperCase() + m.role.slice(1)})
+                            {m.name} ({m.role.charAt(0).toUpperCase() + m.role.slice(1)})
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -3625,22 +3622,6 @@ export default function AdminDashboard() {
                 role: "manager",
                 label: "Manager",
                 color: "orange",
-                features: [
-                  { key: "employees", label: "Employees Tab" },
-                  { key: "attendance", label: "Attendance Tab" },
-                  { key: "leaves", label: "Leave Requests" },
-                  { key: "wfh", label: "WFH Requests" },
-                  { key: "permissions", label: "Permissions" },
-                  { key: "change-requests", label: "Change Requests" },
-                  { key: "payroll", label: "Payroll (view)" },
-                  { key: "holidays", label: "Holidays" },
-                  { key: "policy", label: "Company Policy" },
-                ]
-              },
-              {
-                role: "devops_manager",
-                label: "DevOps Manager",
-                color: "purple",
                 features: [
                   { key: "employees", label: "Employees Tab" },
                   { key: "attendance", label: "Attendance Tab" },

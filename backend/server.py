@@ -289,7 +289,7 @@ async def require_admin(request: Request) -> dict:
 
 async def require_admin_or_manager(request: Request) -> dict:
     user = await get_current_user(request)
-    if user.get("role") not in ("admin", "manager", "devops_manager"):
+    if user.get("role") not in ("admin", "manager"):
         raise HTTPException(status_code=403, detail="Admin or Manager access required")
     return user
 
@@ -1330,7 +1330,7 @@ async def create_employee(user_data: UserRegister, request: Request):
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    role = user_data.role if user_data.role in ("employee", "manager", "devops_manager") else "employee"
+    role = user_data.role if user_data.role in ("employee", "manager") else "employee"
     hashed = hash_password(user_data.password)
 
     # Generate next employee code (SC24001, SC24002, ...) or use provided
@@ -1368,7 +1368,7 @@ async def update_employee(employee_id: str, update_data: EmployeeUpdate, request
         raise HTTPException(status_code=400, detail="No update data provided")
 
     # Validate role if being changed
-    if "role" in update_dict and update_dict["role"] not in ("employee", "manager", "devops_manager", "admin"):
+    if "role" in update_dict and update_dict["role"] not in ("employee", "manager", "admin"):
         raise HTTPException(status_code=400, detail="Invalid role")
 
     # Validate employee_code uniqueness if being changed
@@ -1659,7 +1659,7 @@ async def update_role_permissions(request: Request):
     await require_admin(request)
     body = await request.json()  # { role: { feature_key: bool, ... }, ... }
     for role, features in body.items():
-        if role not in ("manager", "employee", "devops_manager"):
+        if role not in ("manager", "employee"):
             continue
         for feature_key, enabled in features.items():
             await execute_query(
@@ -1694,7 +1694,7 @@ async def get_all_leave_requests(request: Request, status: Optional[str] = None)
         conditions.append("status = %s")
         args.append(status)
     # Managers only see leave requests from their direct reports
-    if user["role"] in ("manager", "devops_manager"):
+    if user["role"] in ("manager",):
         conditions.append("user_id IN (SELECT id FROM users WHERE reporting_manager_id = %s)")
         args.append(user["id"])
     if conditions:
@@ -1745,7 +1745,7 @@ async def get_all_attendance(request: Request, date: Optional[str] = None):
     if date:
         conditions.append("date = %s")
         args.append(date)
-    if user["role"] in ("manager", "devops_manager"):
+    if user["role"] in ("manager",):
         conditions.append("user_id IN (SELECT id FROM users WHERE reporting_manager_id = %s)")
         args.append(user["id"])
     if conditions:
@@ -1889,7 +1889,7 @@ async def get_all_permissions(request: Request, status: Optional[str] = None):
     if status:
         conditions.append("status = %s")
         args.append(status)
-    if user["role"] in ("manager", "devops_manager"):
+    if user["role"] in ("manager",):
         conditions.append("user_id IN (SELECT id FROM users WHERE reporting_manager_id = %s)")
         args.append(user["id"])
     if conditions:
@@ -2769,7 +2769,7 @@ async def get_all_wfh_requests(request: Request, status: Optional[str] = None):
     if status:
         conditions.append("status = %s")
         args.append(status)
-    if user["role"] in ("manager", "devops_manager"):
+    if user["role"] in ("manager",):
         conditions.append("user_id IN (SELECT id FROM users WHERE reporting_manager_id = %s)")
         args.append(user["id"])
     if conditions:
