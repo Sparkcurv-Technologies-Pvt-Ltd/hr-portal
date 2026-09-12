@@ -338,6 +338,20 @@ code {
   text-align: left;
 }
 
+/* ===== COLLAPSIBLE SIDEBAR ===== */
+.sidebar-collapsed-nav .nav-item span,
+.sidebar-collapsed-nav .nav-item-active span,
+.sidebar-collapsed-nav .sidebar-section-label {
+  display: none;
+}
+.sidebar-collapsed-nav .nav-item,
+.sidebar-collapsed-nav .nav-item-active {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+  gap: 0;
+}
+
 /* ===== METRIC CARD ===== */
 .metric-card {
   background: var(--surface);

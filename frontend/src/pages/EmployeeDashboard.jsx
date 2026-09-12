@@ -17,7 +17,8 @@ import {
   CaretDown, Hourglass, Warning, Timer, ChartBar, Receipt, DownloadSimple,
   CalendarStar, CurrencyCircleDollar, Scroll, Laptop, Trash, CurrencyDollar,
   GitPullRequest, Plus, Sun, Moon, TreeStructure, MapPin, WifiNone,
-  PlayCircle, StopCircle, CheckCircle, UserCircle, UsersThree
+  PlayCircle, StopCircle, CheckCircle, UserCircle, UsersThree,
+  CaretLeft, CaretRight, List, X as XIcon
 } from "@phosphor-icons/react";
 import { OrgTreeView } from "../components/OrgTreeNode";
 import { TimeTrackerCard } from "../components/TimeTrackerCard";
@@ -90,6 +91,14 @@ export default function EmployeeDashboard() {
   const [leaveDialogOpen, setLeaveDialogOpen] = useState(false);
   const [permissionDialogOpen, setPermissionDialogOpen] = useState(false);
   const [activeTab, setActiveTab] = useState("dashboard");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("sidebarCollapsed") === "true");
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const toggleSidebarCollapsed = () => {
+    setSidebarCollapsed((prev) => {
+      localStorage.setItem("sidebarCollapsed", String(!prev));
+      return !prev;
+    });
+  };
 
   const [leaveForm, setLeaveForm] = useState({
     leave_type: "casual",
@@ -347,22 +356,60 @@ export default function EmployeeDashboard() {
 
   return (
     <div className="min-h-screen transition-colors duration-200" style={{ background: 'var(--bg-page)' }}>
+      {/* Mobile Top Bar */}
+      <div className="lg:hidden fixed top-0 left-0 right-0 h-14 z-30 flex items-center justify-between px-4 transition-colors duration-200" style={{ background: 'var(--sidebar-bg)', borderBottom: '1px solid var(--sidebar-border)' }}>
+        <div className="flex items-center gap-2">
+          <img src="/sparkcurv-logo.png" alt="Sparkcurv" style={{ width: 28, height: 28, objectFit: 'contain' }} />
+          <span className="text-base font-bold text-slate-900 font-['Outfit']">Sparkcurv</span>
+        </div>
+        <button
+          data-testid="mobile-sidebar-toggle"
+          onClick={() => setMobileSidebarOpen(true)}
+          className="flex items-center justify-center w-9 h-9 rounded-lg"
+          style={{ color: 'var(--nav-text)' }}
+        >
+          <List style={{ width: 22, height: 22 }} />
+        </button>
+      </div>
+
+      {/* Mobile overlay backdrop */}
+      {mobileSidebarOpen && (
+        <div
+          data-testid="mobile-sidebar-overlay"
+          className="fixed inset-0 bg-black/40 z-40 lg:hidden"
+          onClick={() => setMobileSidebarOpen(false)}
+        />
+      )}
+
       {/* Sidebar */}
-      <aside className="fixed left-0 top-0 w-64 h-screen flex flex-col transition-colors duration-200" style={{ background: 'var(--sidebar-bg)', borderRight: '1px solid var(--sidebar-border)', boxShadow: '4px 0 24px rgba(15,23,42,0.04)' }}>
+      <aside
+        className={`fixed left-0 top-0 h-screen flex flex-col z-50 transition-all duration-300 ${sidebarCollapsed ? "w-20" : "w-64"} ${mobileSidebarOpen ? "translate-x-0" : "-translate-x-full"} lg:translate-x-0`}
+        style={{ background: 'var(--sidebar-bg)', borderRight: '1px solid var(--sidebar-border)', boxShadow: '4px 0 24px rgba(15,23,42,0.04)' }}
+      >
         {/* Logo */}
-        <div className="px-5 py-5" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
-          <div className="flex items-center gap-3">
+        <div className="px-5 py-5 flex items-center justify-between" style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+          <div className="flex items-center gap-3 min-w-0">
             <img
               src="/sparkcurv-logo.png"
               alt="Sparkcurv"
               style={{ width: 38, height: 38, objectFit: 'contain', flexShrink: 0 }}
             />
-            <span className="text-xl font-bold text-slate-900 font-['Outfit']">Sparkcurv</span>
+            {!sidebarCollapsed && <span className="text-xl font-bold text-slate-900 font-['Outfit'] truncate">Sparkcurv</span>}
           </div>
+          <button
+            data-testid="mobile-sidebar-close"
+            onClick={() => setMobileSidebarOpen(false)}
+            className="lg:hidden flex items-center justify-center w-7 h-7 rounded-lg text-slate-400 hover:text-slate-700 flex-shrink-0"
+          >
+            <XIcon style={{ width: 16, height: 16 }} />
+          </button>
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 p-4 space-y-1 overflow-y-auto">
+        <nav
+          className={`flex-1 p-4 space-y-1 overflow-y-auto ${sidebarCollapsed ? "sidebar-collapsed-nav" : ""}`}
+          onClick={() => setMobileSidebarOpen(false)}
+        >
           <button
             onClick={() => setActiveTab("dashboard")}
             className={activeTab === "dashboard" ? "nav-item-active w-full" : "nav-item w-full"}
@@ -449,7 +496,7 @@ export default function EmployeeDashboard() {
 
           {isManagerRole && (
             <>
-              <p className="px-3 pt-4 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">Manager Tools</p>
+              <p className="sidebar-section-label px-3 pt-4 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">Manager Tools</p>
               <button
                 data-testid="team-tab"
                 onClick={() => setActiveTab("team")}
@@ -486,17 +533,30 @@ export default function EmployeeDashboard() {
           )}
         </nav>
 
+        {/* Collapse Toggle (desktop only) */}
+        <button
+          data-testid="sidebar-collapse-toggle"
+          onClick={toggleSidebarCollapsed}
+          className="hidden lg:flex items-center justify-center gap-2 mx-4 mb-2 py-2 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-50 transition-colors text-xs font-semibold"
+          style={{ borderTop: '1px solid var(--border-subtle)', marginTop: '4px', paddingTop: '10px' }}
+        >
+          {sidebarCollapsed ? <CaretRight style={{ width: 16, height: 16 }} /> : <CaretLeft style={{ width: 16, height: 16 }} />}
+          {!sidebarCollapsed && <span>Collapse</span>}
+        </button>
+
         {/* User Info */}
         <div className="p-4" style={{ borderTop: '1px solid var(--border-subtle)' }}>
-          <div className="flex items-center gap-3 mb-3 px-1">
+          <div className={`flex items-center gap-3 mb-3 px-1 ${sidebarCollapsed ? "justify-center" : ""}`}>
             <Avatar url={user?.avatar_url} name={user?.name} />
-            <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-slate-900 truncate">{user?.name}</p>
-              <p className="text-xs text-slate-400 truncate">{user?.department}</p>
-              {user?.employee_code && (
-                <p className="text-[10px] font-mono font-bold text-[#002FA7] truncate tracking-wide">{user.employee_code}</p>
-              )}
-            </div>
+            {!sidebarCollapsed && (
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-slate-900 truncate">{user?.name}</p>
+                <p className="text-xs text-slate-400 truncate">{user?.department}</p>
+                {user?.employee_code && (
+                  <p className="text-[10px] font-mono font-bold text-[#002FA7] truncate tracking-wide">{user.employee_code}</p>
+                )}
+              </div>
+            )}
             {/* Theme Toggle */}
             <button
               data-testid="theme-toggle-emp"
@@ -518,16 +578,16 @@ export default function EmployeeDashboard() {
             data-testid="logout-btn"
             onClick={logout}
             variant="outline"
-            className="w-full justify-start gap-2 text-slate-500 hover:text-slate-900 border-slate-200 hover:bg-slate-50 rounded-xl text-sm font-medium h-9"
+            className={`w-full text-slate-500 hover:text-slate-900 border-slate-200 hover:bg-slate-50 rounded-xl text-sm font-medium h-9 ${sidebarCollapsed ? "justify-center px-0" : "justify-start gap-2"}`}
           >
             <SignOut className="h-4 w-4" />
-            Sign Out
+            {!sidebarCollapsed && "Sign Out"}
           </Button>
         </div>
       </aside>
 
       {/* Main Content */}
-      <main className="ml-64 p-8">
+      <main className={`p-8 pt-20 lg:pt-8 transition-all duration-300 ${sidebarCollapsed ? "lg:ml-20" : "lg:ml-64"}`}>
         {activeTab === "dashboard" && (
           <>
             {/* Header */}
