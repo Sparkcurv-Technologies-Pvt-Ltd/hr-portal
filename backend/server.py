@@ -36,6 +36,7 @@ BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8001")
 # Extra fixed emails to always notify (comma-separated in .env)
 _extra_emails_raw = os.environ.get("EXTRA_NOTIFICATION_EMAILS", "")
 EXTRA_NOTIFICATION_EMAILS = [e.strip() for e in _extra_emails_raw.split(",") if e.strip()]
+BREAK_AUTO_END_NOTIFY_EMAILS = ["hr@sparkcurv.com", "ponish.jino@sparkcurv.com"]
 
 def _send_email(to_addresses: list[str], subject: str, html_body: str) -> None:
     """Send HTML email via Gmail SMTP. Silently skips if credentials not set."""
@@ -87,8 +88,38 @@ def _send_email_with_pdf(to_address: str, subject: str, html_body: str, pdf_buff
     except Exception as e:
         logging.getLogger("hr_portal").warning(f"Payslip email failed to {to_address}: {e}")
 
+def _break_auto_end_email_html(employee_name: str, break_start: str, break_end: str, date_str: str) -> str:
+    """Notify HR when a break is auto-ended after hitting the 40-min limit (employee forgot to end it)."""
+    login_url = f"{FRONTEND_URL.rstrip('/')}/login"
+    return f"""<!DOCTYPE html>
+<html><body style="margin:0;padding:0;font-family:Arial,sans-serif;background:#f4f6f9">
+<table width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:32px 16px">
+<table width="580" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.1)">
+  <tr><td style="background:#d97706;padding:28px 32px">
+    <h1 style="margin:0;color:#ffffff;font-size:22px;font-weight:700">Sparkcurv HR Portal</h1>
+    <p style="margin:6px 0 0;color:#fde68a;font-size:14px">Break Auto-Ended Notification</p>
+  </td></tr>
+  <tr><td style="padding:32px">
+    <table width="100%" cellpadding="0" cellspacing="0" style="background:#fffbeb;border-radius:8px;border:1px solid #fde68a">
+      <tr><td style="padding:20px">
+        <p style="margin:0 0 6px;font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Employee</p>
+        <p style="margin:0 0 16px;font-size:17px;font-weight:600;color:#111827">{employee_name}</p>
+        <p style="margin:0 0 6px;font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Date</p>
+        <p style="margin:0;font-size:14px;color:#374151">{date_str} — break started at {break_start}, auto-ended after {MAX_BREAK_MINUTES} minutes (forgot to click "End Break")</p>
+      </td></tr>
+    </table>
+    <p style="margin:28px 0 16px;font-size:14px;color:#374151">
+      This employee's break was automatically closed after hitting the {MAX_BREAK_MINUTES}-minute limit. Their working timer has resumed.
+    </p>
+    <a href="{login_url}" style="display:inline-block;background:#002FA7;color:#ffffff;text-decoration:none;padding:14px 28px;border-radius:8px;font-weight:700;font-size:14px">Login to Portal</a>
+  </td></tr>
+  <tr><td style="background:#f8fafc;padding:16px 32px;border-top:1px solid #e2e8f0">
+    <p style="margin:0;font-size:12px;color:#9ca3af">Sparkcurv HR Portal — Automated notification. Do not reply to this email.</p>
+  </td></tr>
+</table></td></tr></table>
+</body></html>"""
+
 def _emergency_clockout_email_html(employee_name: str, reason: str, working_hours: float, date_str: str) -> str:
-    """Notify-only email to the reporting manager when an employee uses Emergency Clock-Out."""
     login_url = f"{FRONTEND_URL.rstrip('/')}/login"
     return f"""<!DOCTYPE html>
 <html><body style="margin:0;padding:0;font-family:Arial,sans-serif;background:#f4f6f9">
@@ -950,6 +981,38 @@ async def get_pause_data(attendance_id: int):
     formatted = [{"start": p["pause_start"], "end": p["pause_end"]} for p in (pauses_list or [])]
     return formatted, total_pause
 
+async def auto_close_expired_break(attendance: dict, user: dict) -> bool:
+    """If the employee forgot to end their break past the 40-min limit, auto-close it, notify HR, and resume the working timer. Returns True if it just auto-closed one."""
+    active = await execute_query(
+        "SELECT id, break_start FROM breaks WHERE attendance_id = %s AND break_end IS NULL", (attendance["id"],), fetch_one=True
+    )
+    if not active:
+        return False
+    break_start = datetime.fromisoformat(active["break_start"])
+    now = datetime.now(timezone.utc)
+    if (now - break_start).total_seconds() / 60 < MAX_BREAK_MINUTES:
+        return False
+
+    auto_break_end = break_start + timedelta(minutes=MAX_BREAK_MINUTES)
+    await execute_query("UPDATE breaks SET break_end = %s WHERE id = %s", (auto_break_end.isoformat(), active["id"]))
+
+    breaks_list = await execute_query("SELECT break_start, break_end FROM breaks WHERE attendance_id = %s", (attendance["id"],), fetch_all=True)
+    total_break = 0
+    for brk in (breaks_list or []):
+        if brk["break_start"] and brk["break_end"]:
+            s = datetime.fromisoformat(brk["break_start"])
+            e = datetime.fromisoformat(brk["break_end"])
+            total_break += (e - s).total_seconds() / 60
+    await execute_query("UPDATE attendance SET total_break_minutes = %s WHERE id = %s", (int(total_break), attendance["id"]))
+
+    try:
+        html = _break_auto_end_email_html(user["name"], break_start.strftime("%H:%M UTC"), auto_break_end.strftime("%H:%M UTC"), attendance["date"])
+        asyncio.get_event_loop().run_in_executor(None, _send_email, BREAK_AUTO_END_NOTIFY_EMAILS, f"Break Auto-Ended: {user['name']}", html)
+    except Exception as e:
+        logger.warning(f"Break auto-end email dispatch failed: {e}")
+
+    return True
+
 async def get_approved_permission_minutes(user_id: int, date: str) -> int:
     """Sum of approved permission minutes for a user on a given date — reduces the required work hours for the day."""
     rows = await execute_query(
@@ -1055,6 +1118,14 @@ async def get_attendance_status(request: Request):
     required_minutes, permission_minutes_today, is_half_day_today = await get_effective_required_minutes(user["id"], today)
     effective_required_hours = round(required_minutes / 60, 2)
 
+    break_auto_ended = False
+    if attendance.get("clock_out") is None:
+        break_auto_ended = await auto_close_expired_break(attendance, user)
+        if break_auto_ended:
+            breaks_list = await execute_query("SELECT break_start, break_end FROM breaks WHERE attendance_id = %s", (attendance["id"],), fetch_all=True)
+            breaks_formatted = [{"start": b["break_start"], "end": b["break_end"]} for b in (breaks_list or [])]
+            attendance = await execute_query("SELECT * FROM attendance WHERE id = %s", (attendance["id"],), fetch_one=True)
+
     on_break = any(b["end"] is None for b in breaks_formatted)
     on_pause = any(p["end"] is None for p in pauses_formatted)
     total_break_used = attendance.get("total_break_minutes", 0) or 0
@@ -1074,7 +1145,7 @@ async def get_attendance_status(request: Request):
         "is_short_day": bool(attendance.get("is_short_day"))
     }
 
-    return {"clocked_in": attendance.get("clock_out") is None, "on_break": on_break, "on_pause": on_pause, "attendance": att_data, "max_break_minutes": MAX_BREAK_MINUTES, "remaining_break_minutes": remaining_break, "has_wfh_today": has_wfh_today, "required_work_hours": REQUIRED_WORK_HOURS, "permission_minutes_today": int(permission_minutes_today), "is_half_day_today": is_half_day_today, "effective_required_hours": effective_required_hours}
+    return {"clocked_in": attendance.get("clock_out") is None, "on_break": on_break, "on_pause": on_pause, "attendance": att_data, "max_break_minutes": MAX_BREAK_MINUTES, "remaining_break_minutes": remaining_break, "has_wfh_today": has_wfh_today, "required_work_hours": REQUIRED_WORK_HOURS, "permission_minutes_today": int(permission_minutes_today), "is_half_day_today": is_half_day_today, "effective_required_hours": effective_required_hours, "break_auto_ended": break_auto_ended}
 
 @attendance_router.get("/history")
 async def get_attendance_history(request: Request, limit: int = 30):

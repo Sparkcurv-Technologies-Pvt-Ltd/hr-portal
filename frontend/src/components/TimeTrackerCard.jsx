@@ -39,6 +39,9 @@ export function TimeTrackerCard({ user, api }) {
       ]);
       setAttendanceStatus(statusRes.data);
       setMyShift(shiftRes.data);
+      if (statusRes.data?.break_auto_ended) {
+        toast.info(`Your break was auto-ended after ${statusRes.data.max_break_minutes || 40} minutes — working timer resumed.`);
+      }
     } catch (error) {
       console.error("Error fetching attendance status:", error);
     }
