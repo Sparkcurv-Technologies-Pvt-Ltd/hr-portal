@@ -736,7 +736,7 @@ async def clock_out(request: Request):
             total_break += (e - s).total_seconds() / 60
 
     _, total_pause = await get_pause_data(attendance["id"])
-    permission_minutes_today = await get_approved_permission_minutes(user["id"], today)
+    required_minutes, permission_minutes_today, is_half_day_today = await get_effective_required_minutes(user["id"], today)
 
     clock_in_time = datetime.fromisoformat(attendance["clock_in"])
     total_time_minutes = (clock_out_time - clock_in_time).total_seconds() / 60
@@ -744,16 +744,19 @@ async def clock_out(request: Request):
     excess_break = max(0, total_break - MAX_BREAK_MINUTES)
     working_minutes = total_time_minutes - excess_break - total_pause
     working_hours = working_minutes / 60
-    # Approved permission hours reduce the required work minutes for the day
-    required_minutes = max(0, (REQUIRED_WORK_HOURS * 60) - permission_minutes_today)
     is_short_day = 1 if working_minutes < required_minutes else 0
 
     if working_minutes < required_minutes:
         shortfall_minutes = round(required_minutes - working_minutes)
         shortfall_h, shortfall_m = divmod(max(0, shortfall_minutes), 60)
         required_h, required_m = divmod(required_minutes, 60)
-        permission_note = f" (required workday reduced to {required_h}h {required_m}m due to {round(permission_minutes_today)}min approved permission)" if permission_minutes_today else ""
-        raise HTTPException(status_code=400, detail=f"Cannot clock out yet — {shortfall_h}h {shortfall_m}m more working time needed to complete the required {REQUIRED_WORK_HOURS}h workday (breaks & pauses excluded){permission_note}.")
+        reasons = []
+        if is_half_day_today:
+            reasons.append("approved half-day leave")
+        if permission_minutes_today:
+            reasons.append(f"{round(permission_minutes_today)}min approved permission")
+        reduction_note = f" (required workday reduced to {required_h}h {required_m}m due to {' + '.join(reasons)})" if reasons else ""
+        raise HTTPException(status_code=400, detail=f"Cannot clock out yet — {shortfall_h}h {shortfall_m}m more working time needed to complete the required {REQUIRED_WORK_HOURS}h workday (breaks & pauses excluded){reduction_note}.")
 
     await execute_query(
         "UPDATE attendance SET clock_out = %s, total_break_minutes = %s, working_hours = %s, is_short_day = %s, clock_out_lat = %s, clock_out_lng = %s, clock_out_address = %s WHERE id = %s",
@@ -764,7 +767,7 @@ async def clock_out(request: Request):
         await check_and_deduct_half_day_leave(user["id"])
 
     breaks_formatted = [{"start": b["break_start"], "end": b["break_end"]} for b in (breaks_list or [])]
-    return {"id": str(attendance["id"]), "user_id": str(user["id"]), "user_name": user["name"], "date": today, "clock_in": attendance["clock_in"], "clock_out": clock_out_time.isoformat(), "breaks": breaks_formatted, "total_break_minutes": int(total_break), "total_pause_minutes": int(total_pause), "permission_minutes_today": int(permission_minutes_today), "working_hours": round(working_hours, 2), "is_short_day": bool(is_short_day), "clock_out_lat": lat, "clock_out_lng": lng, "clock_out_address": address}
+    return {"id": str(attendance["id"]), "user_id": str(user["id"]), "user_name": user["name"], "date": today, "clock_in": attendance["clock_in"], "clock_out": clock_out_time.isoformat(), "breaks": breaks_formatted, "total_break_minutes": int(total_break), "total_pause_minutes": int(total_pause), "permission_minutes_today": int(permission_minutes_today), "is_half_day_today": is_half_day_today, "working_hours": round(working_hours, 2), "is_short_day": bool(is_short_day), "clock_out_lat": lat, "clock_out_lng": lng, "clock_out_address": address}
 
 async def check_and_deduct_half_day_leave(user_id: int):
     now = datetime.now(timezone.utc)
@@ -910,6 +913,22 @@ async def get_approved_permission_minutes(user_id: int, date: str) -> int:
     )
     return sum(r["duration_minutes"] for r in (rows or []))
 
+async def has_approved_half_day_leave(user_id: int, date: str) -> bool:
+    """True if the employee has an approved half-day leave for this date — halves the required work hours."""
+    row = await execute_query(
+        "SELECT id FROM leave_requests WHERE user_id = %s AND is_half_day = 1 AND status = 'approved' AND start_date = %s",
+        (user_id, date), fetch_one=True
+    )
+    return bool(row)
+
+async def get_effective_required_minutes(user_id: int, date: str) -> tuple:
+    """Returns (required_minutes, permission_minutes, is_half_day) after applying half-day leave + permission reductions."""
+    permission_minutes = await get_approved_permission_minutes(user_id, date)
+    is_half_day = await has_approved_half_day_leave(user_id, date)
+    base_minutes = (REQUIRED_WORK_HOURS * 60) / 2 if is_half_day else (REQUIRED_WORK_HOURS * 60)
+    required_minutes = max(0, base_minutes - permission_minutes)
+    return required_minutes, permission_minutes, is_half_day
+
 @attendance_router.post("/pause/start")
 async def start_pause(request: Request):
     user = await get_current_user(request)
@@ -981,15 +1000,15 @@ async def get_attendance_status(request: Request):
     has_wfh_today = bool(wfh_today)
 
     if not attendance:
-        permission_minutes_today = await get_approved_permission_minutes(user["id"], today)
-        effective_required_hours = round(max(0, REQUIRED_WORK_HOURS - (permission_minutes_today / 60)), 2)
-        return {"clocked_in": False, "on_break": False, "on_pause": False, "attendance": None, "max_break_minutes": MAX_BREAK_MINUTES, "remaining_break_minutes": MAX_BREAK_MINUTES, "has_wfh_today": has_wfh_today, "required_work_hours": REQUIRED_WORK_HOURS, "permission_minutes_today": int(permission_minutes_today), "effective_required_hours": effective_required_hours}
+        required_minutes, permission_minutes_today, is_half_day_today = await get_effective_required_minutes(user["id"], today)
+        effective_required_hours = round(required_minutes / 60, 2)
+        return {"clocked_in": False, "on_break": False, "on_pause": False, "attendance": None, "max_break_minutes": MAX_BREAK_MINUTES, "remaining_break_minutes": MAX_BREAK_MINUTES, "has_wfh_today": has_wfh_today, "required_work_hours": REQUIRED_WORK_HOURS, "permission_minutes_today": int(permission_minutes_today), "is_half_day_today": is_half_day_today, "effective_required_hours": effective_required_hours}
 
     breaks_list = await execute_query("SELECT break_start, break_end FROM breaks WHERE attendance_id = %s", (attendance["id"],), fetch_all=True)
     breaks_formatted = [{"start": b["break_start"], "end": b["break_end"]} for b in (breaks_list or [])]
     pauses_formatted, total_pause = await get_pause_data(attendance["id"])
-    permission_minutes_today = await get_approved_permission_minutes(user["id"], today)
-    effective_required_hours = round(max(0, REQUIRED_WORK_HOURS - (permission_minutes_today / 60)), 2)
+    required_minutes, permission_minutes_today, is_half_day_today = await get_effective_required_minutes(user["id"], today)
+    effective_required_hours = round(required_minutes / 60, 2)
 
     on_break = any(b["end"] is None for b in breaks_formatted)
     on_pause = any(p["end"] is None for p in pauses_formatted)
@@ -1010,7 +1029,7 @@ async def get_attendance_status(request: Request):
         "is_short_day": bool(attendance.get("is_short_day"))
     }
 
-    return {"clocked_in": attendance.get("clock_out") is None, "on_break": on_break, "on_pause": on_pause, "attendance": att_data, "max_break_minutes": MAX_BREAK_MINUTES, "remaining_break_minutes": remaining_break, "has_wfh_today": has_wfh_today, "required_work_hours": REQUIRED_WORK_HOURS, "permission_minutes_today": int(permission_minutes_today), "effective_required_hours": effective_required_hours}
+    return {"clocked_in": attendance.get("clock_out") is None, "on_break": on_break, "on_pause": on_pause, "attendance": att_data, "max_break_minutes": MAX_BREAK_MINUTES, "remaining_break_minutes": remaining_break, "has_wfh_today": has_wfh_today, "required_work_hours": REQUIRED_WORK_HOURS, "permission_minutes_today": int(permission_minutes_today), "is_half_day_today": is_half_day_today, "effective_required_hours": effective_required_hours}
 
 @attendance_router.get("/history")
 async def get_attendance_history(request: Request, limit: int = 30):

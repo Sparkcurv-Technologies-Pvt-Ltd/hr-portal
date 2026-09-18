@@ -162,6 +162,10 @@ Build an HR portal for all employees with Leave, Login, logout, break etc., fron
 - ✅ **Removed DevOps Manager role entirely** (see previous entry).
 - ✅ **Collapsible sidebar + mobile drawer** (see previous entry).
 
+### Sep 2026 (cont. 9)
+- ✅ **Half-day leave now also reduces the 8h clock-out requirement**: Answering "employee sometimes goes home in the afternoon" — the existing "Half-Day Leave" request (leave type + `is_half_day=1`, pre-approved, deducts 0.5 day from leave balance) previously had no effect on attendance/clock-out at all. New `has_approved_half_day_leave()` + `get_effective_required_minutes()` helpers: if approved half-day leave exists for today, required work minutes = 4h (half of 8h) instead of 8h, further reduced by any approved permission minutes. Used consistently in both `/attendance/clock-out` (block + `is_short_day` flag) and `/attendance/status` (`is_half_day_today`, `effective_required_hours` fields). `TimeTrackerCard.jsx` shows a note when the target is reduced due to half-day leave. **User-facing flow going forward: employee should submit a Half-Day Leave request (existing feature, Leave tab) in advance for planned early afternoon departures — the system will then let them clock out after ~4h instead of blocking at 8h.** Verified via curl: approved half-day leave + 4h05m worked → clock-out succeeds, `is_short_day:false`, `effective_required_hours:4.0`.
+- ✅ **Approved permission hours reduce the 8h requirement** (see previous entry — combines with half-day leave additively).
+
 ## Pending Items (Prioritized)
 
 ### P1 - High  

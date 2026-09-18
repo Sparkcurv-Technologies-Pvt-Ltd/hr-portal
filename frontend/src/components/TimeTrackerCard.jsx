@@ -325,6 +325,11 @@ export function TimeTrackerCard({ user, api }) {
             {permissionMinutesToday}min approved permission today — required workday reduced to {formatHours(requiredHours)}
           </p>
         )}
+        {attendanceStatus.is_half_day_today && attendanceStatus.clocked_in && !onBreak && !onPause && (
+          <p data-testid="half-day-adjustment-note" className="text-xs mt-1 text-[#0E7490]">
+            Approved half-day leave today — required workday reduced to {formatHours(requiredHours)}
+          </p>
+        )}
         {onPause && (
           <p className="text-xs mt-1 text-[#0E7490]">Paused time is excluded from your 8h requirement</p>
         )}
