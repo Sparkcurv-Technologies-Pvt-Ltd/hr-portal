@@ -283,7 +283,9 @@ export function TimeTrackerCard({ user, api }) {
   };
 
   const currentWorkingHours = elapsedTime / 3600;
-  const isShortDay = currentWorkingHours < 8 && attendanceStatus.clocked_in;
+  const requiredHours = attendanceStatus.effective_required_hours ?? 8;
+  const permissionMinutesToday = attendanceStatus.permission_minutes_today || 0;
+  const isShortDay = currentWorkingHours < requiredHours && attendanceStatus.clocked_in;
   const onBreak = attendanceStatus.on_break;
   const onPause = attendanceStatus.on_pause;
 
@@ -314,8 +316,13 @@ export function TimeTrackerCard({ user, api }) {
           {onPause ? "Paused (Travel/Away)" : onBreak ? "Break Duration" : attendanceStatus.clocked_in ? "Working Time" : "Not Clocked In"}
         </p>
         {attendanceStatus.clocked_in && !onBreak && !onPause && (
-          <p className={`text-xs mt-1 ${currentWorkingHours >= 8 ? 'text-[#00C853]' : 'text-[#FF2E00]'}`}>
-            {currentWorkingHours >= 8 ? "Minimum 8h reached" : `Need ${formatHours(8 - currentWorkingHours)} more for minimum`}
+          <p data-testid="min-hours-status" className={`text-xs mt-1 ${currentWorkingHours >= requiredHours ? 'text-[#00C853]' : 'text-[#FF2E00]'}`}>
+            {currentWorkingHours >= requiredHours ? `Minimum ${formatHours(requiredHours)} reached` : `Need ${formatHours(requiredHours - currentWorkingHours)} more for minimum`}
+          </p>
+        )}
+        {permissionMinutesToday > 0 && attendanceStatus.clocked_in && !onBreak && !onPause && (
+          <p data-testid="permission-adjustment-note" className="text-xs mt-1 text-[#0E7490]">
+            {permissionMinutesToday}min approved permission today — required workday reduced to {formatHours(requiredHours)}
           </p>
         )}
         {onPause && (
@@ -333,16 +340,17 @@ export function TimeTrackerCard({ user, api }) {
           <div className="w-full bg-gray-200 rounded-full h-2">
             <div
               className={`h-2 rounded-full transition-all ${
-                currentWorkingHours >= 8 ? 'bg-[#00C853]' : 'bg-[#FFC107]'
+                currentWorkingHours >= requiredHours ? 'bg-[#00C853]' : 'bg-[#FFC107]'
               }`}
               style={{ width: `${Math.min(100, currentWorkingHours / 8.5 * 100)}%` }}
             ></div>
           </div>
           <div className="flex justify-between text-xs text-gray-400 mt-1">
             <span>0h</span>
-            <span className="text-[#FF2E00]">8h min</span>
+            <span className="text-[#FF2E00]">{formatHours(requiredHours)} min</span>
             <span>8:30</span>
           </div>
+
         </div>
       )}
 

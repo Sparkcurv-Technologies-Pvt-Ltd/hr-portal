@@ -1,3 +1,2 @@
-cron=3.0pl1-162
 mariadb-client=1:10.11.18-0+deb12u1
 mariadb-server=1:10.11.18-0+deb12u1
