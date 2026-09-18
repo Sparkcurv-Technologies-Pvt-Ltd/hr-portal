@@ -2,8 +2,12 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import {
   Clock, Coffee, SignOut, Warning, Laptop, MapPin, WifiNone,
-  Timer, PlayCircle, StopCircle, Pause, Play
+  Timer, PlayCircle, StopCircle, Pause, Play, FirstAidKit
 } from "@phosphor-icons/react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
+import { Button } from "./ui/button";
+import { Label } from "./ui/label";
+import { Textarea } from "./ui/textarea";
 
 const formatHours = (decimalHours) => {
   if (!decimalHours) return "—";
@@ -23,6 +27,8 @@ export function TimeTrackerCard({ user, api }) {
   const [loading, setLoading] = useState(false);
   const [timerStatus, setTimerStatus] = useState({ is_running: false, total_seconds: 0, live_seconds: 0, sessions: [], target_seconds: 28800 });
   const [liveElapsed, setLiveElapsed] = useState(0);
+  const [showEmergencyDialog, setShowEmergencyDialog] = useState(false);
+  const [emergencyReason, setEmergencyReason] = useState("");
   const timerIntervalRef = useRef(null);
 
   const fetchStatus = useCallback(async () => {
@@ -212,6 +218,35 @@ export function TimeTrackerCard({ user, api }) {
       const response = await api.post("/attendance/clock-out", location || {});
       const workingHours = response.data?.working_hours || 0;
       toast.success(`Clocked out successfully! (${formatHours(workingHours)} worked)`);
+      fetchStatus();
+    } catch (error) {
+      toast.error(error.response?.data?.detail || error.message || "Failed to clock out");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleEmergencyClockOut = async () => {
+    if (emergencyReason.trim().length < 5) {
+      toast.error("Please describe the emergency (at least 5 characters)");
+      return;
+    }
+    setLoading(true);
+    try {
+      let location = null;
+      const gpsDisabled = user?.gps_tracking_enabled === false;
+      if (!gpsDisabled) {
+        try {
+          location = await getLocation();
+        } catch (gpsErr) {
+          if (!attendanceStatus.has_wfh_today) throw gpsErr;
+        }
+      }
+      const response = await api.post("/attendance/clock-out", { ...(location || {}), emergency_reason: emergencyReason.trim() });
+      const workingHours = response.data?.working_hours || 0;
+      toast.success(`Emergency clock-out recorded (${formatHours(workingHours)} worked). Your manager has been notified.`);
+      setShowEmergencyDialog(false);
+      setEmergencyReason("");
       fetchStatus();
     } catch (error) {
       toast.error(error.response?.data?.detail || error.message || "Failed to clock out");
@@ -460,9 +495,66 @@ export function TimeTrackerCard({ user, api }) {
               <SignOut className="inline h-5 w-5 mr-2" weight="bold" />
               Clock Out
             </button>
+            {!onBreak && !onPause && currentWorkingHours < requiredHours && (
+              <button
+                data-testid="emergency-clockout-link"
+                onClick={() => setShowEmergencyDialog(true)}
+                disabled={loading}
+                className="w-full text-center text-xs font-semibold text-red-500 hover:text-red-600 mt-1 flex items-center justify-center gap-1"
+              >
+                <FirstAidKit className="h-3.5 w-3.5" weight="bold" />
+                Emergency Clock-Out
+              </button>
+            )}
           </>
         )}
       </div>
+
+      {/* Emergency Clock-Out Dialog */}
+      <Dialog open={showEmergencyDialog} onOpenChange={(open) => { setShowEmergencyDialog(open); if (!open) setEmergencyReason(""); }}>
+        <DialogContent data-testid="emergency-clockout-dialog" className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-red-600">
+              <FirstAidKit className="h-5 w-5" weight="fill" />
+              Emergency Clock-Out
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <p className="text-sm text-slate-500">
+              You've worked {formatHours(currentWorkingHours)} of the required {formatHours(requiredHours)}. Emergency clock-out bypasses this requirement — your manager will be notified immediately and this won't affect your leave balance.
+            </p>
+            <div className="space-y-1.5">
+              <Label htmlFor="emergency-reason-input">Reason for emergency <span className="text-red-500">*</span></Label>
+              <Textarea
+                id="emergency-reason-input"
+                data-testid="emergency-reason-input"
+                placeholder="e.g. Family emergency, need to leave immediately"
+                value={emergencyReason}
+                onChange={(e) => setEmergencyReason(e.target.value)}
+                rows={3}
+              />
+            </div>
+            <div className="flex gap-2 justify-end pt-2">
+              <Button
+                data-testid="emergency-clockout-cancel-btn"
+                variant="outline"
+                onClick={() => setShowEmergencyDialog(false)}
+                disabled={loading}
+              >
+                Cancel
+              </Button>
+              <Button
+                data-testid="emergency-clockout-confirm-btn"
+                onClick={handleEmergencyClockOut}
+                disabled={loading}
+                className="bg-red-600 hover:bg-red-700 text-white"
+              >
+                Confirm Emergency Clock-Out
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Today's Summary */}
       {attendanceStatus.attendance && (

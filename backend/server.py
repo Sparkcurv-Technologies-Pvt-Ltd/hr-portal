@@ -87,6 +87,39 @@ def _send_email_with_pdf(to_address: str, subject: str, html_body: str, pdf_buff
     except Exception as e:
         logging.getLogger("hr_portal").warning(f"Payslip email failed to {to_address}: {e}")
 
+def _emergency_clockout_email_html(employee_name: str, reason: str, working_hours: float, date_str: str) -> str:
+    """Notify-only email to the reporting manager when an employee uses Emergency Clock-Out."""
+    login_url = f"{FRONTEND_URL.rstrip('/')}/login"
+    return f"""<!DOCTYPE html>
+<html><body style="margin:0;padding:0;font-family:Arial,sans-serif;background:#f4f6f9">
+<table width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:32px 16px">
+<table width="580" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.1)">
+  <tr><td style="background:#dc2626;padding:28px 32px">
+    <h1 style="margin:0;color:#ffffff;font-size:22px;font-weight:700">Sparkcurv HR Portal</h1>
+    <p style="margin:6px 0 0;color:#fecaca;font-size:14px">Emergency Clock-Out Alert</p>
+  </td></tr>
+  <tr><td style="padding:32px">
+    <table width="100%" cellpadding="0" cellspacing="0" style="background:#fef2f2;border-radius:8px;border:1px solid #fecaca">
+      <tr><td style="padding:20px">
+        <p style="margin:0 0 6px;font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Employee</p>
+        <p style="margin:0 0 16px;font-size:17px;font-weight:600;color:#111827">{employee_name}</p>
+        <p style="margin:0 0 6px;font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Date</p>
+        <p style="margin:0 0 16px;font-size:14px;color:#374151">{date_str} — clocked out after {working_hours}h</p>
+        <p style="margin:0 0 6px;font-size:11px;font-weight:700;color:#6b7280;text-transform:uppercase;letter-spacing:1px">Reason</p>
+        <p style="margin:0;font-size:14px;color:#374151;line-height:1.6">{reason}</p>
+      </td></tr>
+    </table>
+    <p style="margin:28px 0 16px;font-size:14px;color:#374151">
+      Your direct report used Emergency Clock-Out before completing the required work hours. Log in to the HR Portal to review their attendance record.
+    </p>
+    <a href="{login_url}" style="display:inline-block;background:#002FA7;color:#ffffff;text-decoration:none;padding:14px 28px;border-radius:8px;font-weight:700;font-size:14px">Login to Portal</a>
+  </td></tr>
+  <tr><td style="background:#f8fafc;padding:16px 32px;border-top:1px solid #e2e8f0">
+    <p style="margin:0;font-size:12px;color:#9ca3af">Sparkcurv HR Portal — Automated notification. Do not reply to this email.</p>
+  </td></tr>
+</table></td></tr></table>
+</body></html>"""
+
 def _cr_email_html(cr: dict, reviewer_label: str) -> str:
     """Build a notify-only CR email — no action links. Approval must happen after portal login."""
     login_url = f"{FRONTEND_URL.rstrip('/')}/login"
@@ -677,9 +710,11 @@ async def clock_out(request: Request):
         body = await request.json()
         lat = body.get("latitude")
         lng = body.get("longitude")
+        emergency_reason = (body.get("emergency_reason") or "").strip()
     except Exception:
         lat = None
         lng = None
+        emergency_reason = ""
 
     # Allow clock-out without GPS if user has approved WFH today
     wfh_today = await execute_query(
@@ -745,8 +780,9 @@ async def clock_out(request: Request):
     working_minutes = total_time_minutes - excess_break - total_pause
     working_hours = working_minutes / 60
     is_short_day = 1 if working_minutes < required_minutes else 0
+    is_emergency = bool(emergency_reason) and working_minutes < required_minutes
 
-    if working_minutes < required_minutes:
+    if working_minutes < required_minutes and not emergency_reason:
         shortfall_minutes = round(required_minutes - working_minutes)
         shortfall_h, shortfall_m = divmod(max(0, shortfall_minutes), 60)
         required_h, required_m = divmod(required_minutes, 60)
@@ -756,18 +792,27 @@ async def clock_out(request: Request):
         if permission_minutes_today:
             reasons.append(f"{round(permission_minutes_today)}min approved permission")
         reduction_note = f" (required workday reduced to {required_h}h {required_m}m due to {' + '.join(reasons)})" if reasons else ""
-        raise HTTPException(status_code=400, detail=f"Cannot clock out yet — {shortfall_h}h {shortfall_m}m more working time needed to complete the required {REQUIRED_WORK_HOURS}h workday (breaks & pauses excluded){reduction_note}.")
+        raise HTTPException(status_code=400, detail=f"Cannot clock out yet — {shortfall_h}h {shortfall_m}m more working time needed to complete the required {REQUIRED_WORK_HOURS}h workday (breaks & pauses excluded){reduction_note}. If this is an emergency, use Emergency Clock-Out instead.")
 
     await execute_query(
-        "UPDATE attendance SET clock_out = %s, total_break_minutes = %s, working_hours = %s, is_short_day = %s, clock_out_lat = %s, clock_out_lng = %s, clock_out_address = %s WHERE id = %s",
-        (clock_out_time.isoformat(), int(total_break), round(working_hours, 2), is_short_day, lat, lng, address, attendance["id"])
+        "UPDATE attendance SET clock_out = %s, total_break_minutes = %s, working_hours = %s, is_short_day = %s, is_emergency_clockout = %s, emergency_reason = %s, clock_out_lat = %s, clock_out_lng = %s, clock_out_address = %s WHERE id = %s",
+        (clock_out_time.isoformat(), int(total_break), round(working_hours, 2), is_short_day, 1 if is_emergency else 0, emergency_reason if is_emergency else None, lat, lng, address, attendance["id"])
     )
 
-    if is_short_day:
+    if is_short_day and not is_emergency:
         await check_and_deduct_half_day_leave(user["id"])
 
+    if is_emergency and user.get("reporting_manager_id"):
+        try:
+            mgr = await execute_query("SELECT id, name, email FROM users WHERE id = %s", (user["reporting_manager_id"],), fetch_one=True)
+            if mgr and mgr.get("email"):
+                html = _emergency_clockout_email_html(user["name"], emergency_reason, round(working_hours, 2), today)
+                asyncio.get_event_loop().run_in_executor(None, _send_email, [mgr["email"]], f"Emergency Clock-Out: {user['name']}", html)
+        except Exception as e:
+            logger.warning(f"Emergency clock-out email dispatch failed: {e}")
+
     breaks_formatted = [{"start": b["break_start"], "end": b["break_end"]} for b in (breaks_list or [])]
-    return {"id": str(attendance["id"]), "user_id": str(user["id"]), "user_name": user["name"], "date": today, "clock_in": attendance["clock_in"], "clock_out": clock_out_time.isoformat(), "breaks": breaks_formatted, "total_break_minutes": int(total_break), "total_pause_minutes": int(total_pause), "permission_minutes_today": int(permission_minutes_today), "is_half_day_today": is_half_day_today, "working_hours": round(working_hours, 2), "is_short_day": bool(is_short_day), "clock_out_lat": lat, "clock_out_lng": lng, "clock_out_address": address}
+    return {"id": str(attendance["id"]), "user_id": str(user["id"]), "user_name": user["name"], "date": today, "clock_in": attendance["clock_in"], "clock_out": clock_out_time.isoformat(), "breaks": breaks_formatted, "total_break_minutes": int(total_break), "total_pause_minutes": int(total_pause), "permission_minutes_today": int(permission_minutes_today), "is_half_day_today": is_half_day_today, "working_hours": round(working_hours, 2), "is_short_day": bool(is_short_day), "is_emergency_clockout": is_emergency, "emergency_reason": emergency_reason if is_emergency else None, "clock_out_lat": lat, "clock_out_lng": lng, "clock_out_address": address}
 
 async def check_and_deduct_half_day_leave(user_id: int):
     now = datetime.now(timezone.utc)
@@ -1808,6 +1853,7 @@ async def get_all_attendance(request: Request, date: Optional[str] = None):
             "breaks": [{"start": b["break_start"], "end": b["break_end"]} for b in (breaks_list or [])],
             "total_break_minutes": rec.get("total_break_minutes", 0),
             "working_hours": rec.get("working_hours"), "is_short_day": bool(rec.get("is_short_day")),
+            "is_emergency_clockout": bool(rec.get("is_emergency_clockout")), "emergency_reason": rec.get("emergency_reason"),
             "clock_in_lat": rec.get("clock_in_lat"), "clock_in_lng": rec.get("clock_in_lng"),
             "clock_in_address": rec.get("clock_in_address"),
             "clock_out_address": rec.get("clock_out_address"),
@@ -3572,24 +3618,31 @@ async def admin_action_cr(cr_id: str, request: Request):
 @admin_router.get("/notifications")
 async def get_notifications(request: Request):
     user = await require_admin_or_manager(request)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     pending_leaves = await execute_query("SELECT COUNT(*) as cnt FROM leave_requests WHERE status = 'pending'", fetch_one=True)
     pending_wfh = await execute_query("SELECT COUNT(*) as cnt FROM wfh_requests WHERE status = 'pending'", fetch_one=True)
     pending_permissions = await execute_query("SELECT COUNT(*) as cnt FROM permissions WHERE status = 'pending'", fetch_one=True)
     if user["role"] == "admin":
         pending_crs = await execute_query("SELECT COUNT(*) as cnt FROM change_requests WHERE status IN ('pending', 'manager_approved')", fetch_one=True)
+        emergency_clockouts = await execute_query("SELECT COUNT(*) as cnt FROM attendance WHERE is_emergency_clockout = 1 AND date = %s", (today,), fetch_one=True)
     else:
         # Managers only see CRs assigned to them that are still pending their action
         pending_crs = await execute_query(
             "SELECT COUNT(*) as cnt FROM change_requests WHERE assigned_manager_id = %s AND manager_approval = 'pending'",
             (user["id"],), fetch_one=True
         )
+        emergency_clockouts = await execute_query(
+            "SELECT COUNT(*) as cnt FROM attendance a JOIN users u ON a.user_id = u.id WHERE a.is_emergency_clockout = 1 AND a.date = %s AND u.reporting_manager_id = %s",
+            (today, user["id"]), fetch_one=True
+        )
 
-    total = (pending_leaves["cnt"] or 0) + (pending_wfh["cnt"] or 0) + (pending_crs["cnt"] or 0) + (pending_permissions["cnt"] or 0)
+    total = (pending_leaves["cnt"] or 0) + (pending_wfh["cnt"] or 0) + (pending_crs["cnt"] or 0) + (pending_permissions["cnt"] or 0) + (emergency_clockouts["cnt"] or 0)
     items = []
     if pending_leaves["cnt"]: items.append({"type": "leave", "count": pending_leaves["cnt"], "label": f"{pending_leaves['cnt']} pending leave request(s)"})
     if pending_wfh["cnt"]: items.append({"type": "wfh", "count": pending_wfh["cnt"], "label": f"{pending_wfh['cnt']} pending WFH request(s)"})
     if pending_crs["cnt"]: items.append({"type": "cr", "count": pending_crs["cnt"], "label": f"{pending_crs['cnt']} pending change request(s)"})
     if pending_permissions["cnt"]: items.append({"type": "permission", "count": pending_permissions["cnt"], "label": f"{pending_permissions['cnt']} pending permission request(s)"})
+    if emergency_clockouts["cnt"]: items.append({"type": "emergency", "count": emergency_clockouts["cnt"], "label": f"{emergency_clockouts['cnt']} emergency clock-out(s) today"})
     return {"total": total, "items": items}
 
 # Attendance heatmap — weekly on-time/late/absent
@@ -4221,7 +4274,7 @@ async def startup():
         """)
 
         # Migration: Add location columns to attendance
-        for col in ["clock_in_lat DOUBLE", "clock_in_lng DOUBLE", "clock_in_address TEXT", "clock_out_lat DOUBLE", "clock_out_lng DOUBLE", "clock_out_address TEXT", "location_type VARCHAR(20)"]:
+        for col in ["clock_in_lat DOUBLE", "clock_in_lng DOUBLE", "clock_in_address TEXT", "clock_out_lat DOUBLE", "clock_out_lng DOUBLE", "clock_out_address TEXT", "location_type VARCHAR(20)", "is_emergency_clockout TINYINT DEFAULT 0", "emergency_reason TEXT"]:
             col_name = col.split()[0]
             try:
                 await execute_query(f"SELECT {col_name} FROM attendance LIMIT 1", fetch_one=True)

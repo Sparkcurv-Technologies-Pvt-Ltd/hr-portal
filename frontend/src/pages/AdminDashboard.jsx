@@ -3078,7 +3078,16 @@ export default function AdminDashboard() {
                           </td>
                           <td className="table-cell">
                             <div className="flex items-center gap-1.5">
-                              {rec.is_short_day ? (
+                              {rec.is_emergency_clockout ? (
+                                <span
+                                  data-testid={`emergency-badge-${rec.user_id}-${rec.date}`}
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-50 text-red-600 text-[10px] font-bold border border-red-200"
+                                  title={rec.emergency_reason || "Emergency clock-out"}
+                                >
+                                  <Warning className="h-3 w-3" weight="fill" />
+                                  Emergency
+                                </span>
+                              ) : rec.is_short_day ? (
                                 <span className="badge-rejected">Short Day</span>
                               ) : rec.clock_out ? (
                                 <span className="badge-approved">Completed</span>
@@ -3092,6 +3101,9 @@ export default function AdminDashboard() {
                                 </span>
                               )}
                             </div>
+                            {rec.is_emergency_clockout && rec.emergency_reason && (
+                              <p className="text-[10px] text-slate-400 mt-1 max-w-[180px] truncate" title={rec.emergency_reason}>"{rec.emergency_reason}"</p>
+                            )}
                           </td>
                         </tr>
                       ))
