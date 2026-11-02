@@ -883,6 +883,16 @@ async def review_wfh_request(wfh_id: str, request: Request, action: str):
         "UPDATE wfh_requests SET status = %s, reviewed_by = %s, reviewed_at = %s WHERE id = %s",
         (new_status, reviewer["name"], datetime.now(timezone.utc).isoformat(), int(wfh_id))
     )
+
+    try:
+        html_body = _request_email_html(f"WFH Request {new_status.title()}", wfh_req["user_name"], [
+            ("Date", wfh_req["date"]),
+            ("Status", f"{new_status.title()} by {reviewer['name']}"),
+        ], message="Log in to the HR Portal for details.")
+        asyncio.get_event_loop().run_in_executor(None, _send_email, _decision_recipients(wfh_req.get("user_email")), f"WFH {new_status.title()}: {wfh_req['user_name']} ({wfh_req['date']})", html_body)
+    except Exception as e:
+        logger.warning(f"WFH decision email dispatch failed: {e}")
+
     return {"message": f"WFH request {new_status}"}
 
 

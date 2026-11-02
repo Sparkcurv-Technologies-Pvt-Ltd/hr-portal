@@ -1,9 +1,13 @@
 """Employee work-from-home routes (``/api/wfh``)."""
 
+import asyncio
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request
 
+from app.core.config import REQUEST_NOTIFY_EMAILS
+from app.core.email import _request_email_html, _send_email
+from app.core.log import logger
 from app.core.security import get_current_user
 from app.db import execute_query
 from app.schemas.wfh import WFHRequest
@@ -49,6 +53,16 @@ async def create_wfh_request(wfh_data: WFHRequest, request: Request):
         (user["id"], user["name"], user.get("email", ""), wfh_data.date, wfh_data.reason, datetime.now(timezone.utc).isoformat()),
         last_id=True
     )
+
+    try:
+        html_body = _request_email_html("New WFH Request", user["name"], [
+            ("Date", wfh_data.date),
+            ("Reason", wfh_data.reason or "-"),
+        ])
+        asyncio.get_event_loop().run_in_executor(None, _send_email, REQUEST_NOTIFY_EMAILS, f"WFH Request: {user['name']} ({wfh_data.date})", html_body)
+    except Exception as e:
+        logger.warning(f"WFH request email dispatch failed: {e}")
+
     return {"id": str(wfh_id), "user_id": str(user["id"]), "user_name": user["name"], "date": wfh_data.date, "reason": wfh_data.reason, "status": "pending", "created_at": datetime.now(timezone.utc).isoformat()}
 
 @wfh_router.get("/my-requests")
