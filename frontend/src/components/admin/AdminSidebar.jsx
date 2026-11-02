@@ -6,7 +6,6 @@ import {
   SignOut, Users, CalendarCheck, Clock, House, Timer, CurrencyDollar, ClockClockwise, CalendarStar, Scroll, Laptop,
   GitPullRequest, Bell, TreeStructure, ShieldCheck, Wallet, ArrowLeft, LockKey, X as XIcon
 } from "@phosphor-icons/react";
-import { ResetPortalButton } from "@/components/admin/ResetPortalButton";
 import { Avatar } from "@/components/common/Avatar";
 import { MobileTopBar } from "@/components/common/MobileTopBar";
 import { SidebarBrand } from "@/components/common/SidebarBrand";
@@ -180,9 +179,6 @@ export function AdminSidebar({
               <ArrowLeft className="h-4 w-4" />
               {!sidebarCollapsed && "My Dashboard"}
             </Button>
-          )}
-          {user?.role === "admin" && !sidebarCollapsed && (
-            <ResetPortalButton api={api} onDone={() => { fetchData(); }} />
           )}
         </div>
       </aside>

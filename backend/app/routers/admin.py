@@ -17,9 +17,9 @@ from app.core.config import APP_TIMEZONE, DEFAULT_SHIFT_END, DEFAULT_SHIFT_START
 from app.core.email import _cr_email_html, _request_email_html, _send_email
 from app.core.log import logger
 from app.core.permissions import GRANTABLE_ROLES, MODULES, effective_module_permissions, forbid_granted_on_admin, get_module_permissions, has_permission, require_any_view, require_permission
-from app.core.security import get_current_user, hash_password, require_admin, verify_password
+from app.core.security import get_current_user, hash_password, require_admin
 from app.db import execute_query
-from app.schemas.admin import OfficeSettingsUpdate, OrgNodeCreate, OrgNodeUpdate, ResetPortalRequest
+from app.schemas.admin import OfficeSettingsUpdate, OrgNodeCreate, OrgNodeUpdate
 from app.schemas.auth import UserRegister
 from app.schemas.employees import EmployeeUpdate, PasswordReset, SalaryUpdate, ShiftAssign
 from app.schemas.leave import LeaveBalanceUpdate
@@ -1274,37 +1274,3 @@ async def get_attendance_locations(request: Request, date: str = None):
         d["user_id"] = str(d["user_id"])
         result.append(d)
     return result
-
-
-@admin_router.post("/reset-portal")
-async def reset_portal(body: ResetPortalRequest, request: Request):
-    """Deletes ALL data except the superadmin user and Worker Tree. Requires admin password."""
-    user = await require_admin(request)
-    admin_id = user.get("id")
-
-    # Verify password before proceeding
-    db_user = await execute_query("SELECT password_hash FROM users WHERE id = %s", (int(admin_id),), fetch_one=True)
-    if not db_user or not verify_password(body.password, db_user["password_hash"]):
-        raise HTTPException(status_code=401, detail="Incorrect password. Reset cancelled.")
-
-    tables_to_clear = [
-        "attendance", "breaks", "leave_requests", "wfh_requests",
-        "permissions", "payslips", "leave_deductions", "custom_deductions",
-        "payroll_runs", "change_requests", "media",
-    ]
-    for table in tables_to_clear:
-        try:
-            await execute_query(f"DELETE FROM `{table}`", ())
-        except Exception as e:
-            logging.warning(f"Reset: could not clear {table}: {e}")
-
-    try:
-        await execute_query(
-            "DELETE FROM users WHERE id != %s AND email NOT IN ('ponish.jino@sparkcurv.com', 'hr@sparkcurv.com')",
-            (int(admin_id),)
-        )
-    except Exception as e:
-        logging.warning(f"Reset: could not clear users: {e}")
-
-    logging.info(f"Portal reset by admin id={admin_id}")
-    return {"message": "Portal reset complete. All employee data cleared. Worker Tree and your account are preserved."}
