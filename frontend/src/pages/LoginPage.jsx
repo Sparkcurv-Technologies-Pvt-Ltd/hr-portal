@@ -5,12 +5,13 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "../components/ui/dialog";
 import { toast } from "sonner";
+import { NetworkBackground } from "../components/common/NetworkBackground";
 import {
   Eye, EyeSlash, Envelope, Lock, Question, UserCircle, Clock, CalendarCheck, Receipt, ShieldCheck, ArrowRight
 } from "@phosphor-icons/react";
 
 const FEATURES = [
-  { icon: Clock, title: "Login & breaks", text: "8-hour day with 5, 10 or 20 minute breaks" },
+  { icon: Clock, title: "Login & Logout", text: "8-hour day, tracked live from Login to Logout" },
   { icon: CalendarCheck, title: "Leave & WFH", text: "Request, approve and track in one place" },
   { icon: Receipt, title: "Payroll", text: "Monthly payslips, emailed as PDF" },
   { icon: ShieldCheck, title: "Access control", text: "View / Edit / Delete per employee" },
@@ -46,13 +47,10 @@ export default function LoginPage() {
 
   return (
     <div className="relative min-h-screen overflow-hidden" style={{ background: 'var(--brand-gradient)' }}>
-      {/* Background glows + dot grid */}
+      {/* Background glows + live "spider net" */}
       <div className="absolute -top-40 -left-40 w-[520px] h-[520px] rounded-full" style={{ background: 'radial-gradient(circle, rgba(125,211,252,0.35), transparent 65%)' }} />
       <div className="absolute -bottom-48 right-[-120px] w-[620px] h-[620px] rounded-full" style={{ background: 'radial-gradient(circle, rgba(255,255,255,0.18), transparent 65%)' }} />
-      <div
-        className="absolute inset-0"
-        style={{ backgroundImage: 'radial-gradient(circle at 1px 1px, rgba(255,255,255,0.10) 1px, transparent 0)', backgroundSize: '28px 28px' }}
-      />
+      <NetworkBackground />
 
       <div className="relative z-10 min-h-screen max-w-[1240px] mx-auto px-5 sm:px-8 py-10 flex flex-col lg:flex-row items-center justify-center gap-10 lg:gap-16">
         {/* Brand story (desktop) */}
