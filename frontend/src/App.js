@@ -7,7 +7,7 @@ import AdminDashboard from "./pages/AdminDashboard";
 import { hasAnyModuleAccess } from "./lib/permissions";
 import "./App.css";
 
-const ProtectedRoute = ({ children, requireAdminOrManager = false }) => {
+const ProtectedRoute = ({ children, requireAdminOrManager = false, employeePortal = false }) => {
   const { user, loading } = useAuth();
 
   if (loading) {
@@ -24,6 +24,11 @@ const ProtectedRoute = ({ children, requireAdminOrManager = false }) => {
 
   if (requireAdminOrManager && user.role !== "admin" && !hasAnyModuleAccess(user)) {
     return <Navigate to="/dashboard" replace />;
+  }
+
+  // Admins work in the Admin Panel; the employee portal is for employees and managers
+  if (employeePortal && user.role === "admin") {
+    return <Navigate to="/admin" replace />;
   }
 
   return children;
@@ -58,7 +63,7 @@ function App() {
               </PublicRoute>
             } />
             <Route path="/dashboard" element={
-              <ProtectedRoute>
+              <ProtectedRoute employeePortal>
                 <EmployeeDashboard />
               </ProtectedRoute>
             } />

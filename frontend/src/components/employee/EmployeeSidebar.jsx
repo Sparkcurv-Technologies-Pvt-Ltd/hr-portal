@@ -67,7 +67,9 @@ export function EmployeeSidebar({
   };
 
   const navigate = useNavigate();
-  const showManagementLink = hasAnyModuleAccess(user);
+  // Only for managers an admin has granted module access; employees never see it
+  // (admins use the Admin Panel directly)
+  const showManagementLink = user?.role === "manager" && hasAnyModuleAccess(user);
 
   const sections = EMPLOYEE_NAV_SECTIONS
     .filter(section => !section.managerOnly || isManagerRole)

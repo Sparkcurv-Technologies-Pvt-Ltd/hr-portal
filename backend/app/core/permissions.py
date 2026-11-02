@@ -1,7 +1,8 @@
 """Per-employee module permissions (View / Edit / Delete), granted by admins.
 
-Admins always have full access. Other users only get what is stored for them in
-``user_permissions``. Module keys match the admin panel tabs and
+Admins always have full access. Managers get what an admin stores for them in
+``user_permissions``. Employees (role "employee") never get management access, whatever
+is stored for them. Module keys match the admin panel tabs and
 ``frontend/src/lib/permissions.js``.
 """
 
@@ -28,6 +29,17 @@ async def get_module_permissions(user_id: int) -> dict:
         r["module"]: {"view": bool(r["can_view"]), "edit": bool(r["can_edit"]), "delete": bool(r["can_delete"])}
         for r in (rows or [])
     }
+
+
+# Roles that can be granted management-panel modules (admins already have everything)
+GRANTABLE_ROLES = ("manager",)
+
+
+async def effective_module_permissions(user: dict) -> dict:
+    """Grants that actually apply to this user: none for employees."""
+    if user.get("role") not in GRANTABLE_ROLES:
+        return {}
+    return await get_module_permissions(user["id"])
 
 
 def has_permission(perms: dict, module: str, action: str) -> bool:
@@ -63,7 +75,7 @@ async def require_permission(request: Request, module: str, action: str = "view"
     user = await get_current_user(request)
     if user.get("role") == "admin":
         return user
-    if has_permission(await get_module_permissions(user["id"]), module, action):
+    if has_permission(await effective_module_permissions(user), module, action):
         return _granted_scope(user)
     if allow_manager and user.get("role") == "manager":
         return user
@@ -75,7 +87,7 @@ async def require_any_view(request: Request, allow_manager: bool = False) -> dic
     user = await get_current_user(request)
     if user.get("role") == "admin":
         return user
-    perms = await get_module_permissions(user["id"])
+    perms = await effective_module_permissions(user)
     if any(has_permission(perms, m, "view") for m in MODULES):
         return _granted_scope(user)
     if allow_manager and user.get("role") == "manager":

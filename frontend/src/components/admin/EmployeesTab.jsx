@@ -657,8 +657,8 @@ export function EmployeesTab({
                     </Button>
                     )}
 
-                    {/* Access permissions (admins only; admin rows always have full access) */}
-                    {isAdminUser && emp.role !== "admin" && (
+                    {/* Management access (admins only; can only be given to managers) */}
+                    {isAdminUser && emp.role === "manager" && (
                       <Button
                         data-testid={`access-btn-${emp.id}`}
                         variant="ghost"

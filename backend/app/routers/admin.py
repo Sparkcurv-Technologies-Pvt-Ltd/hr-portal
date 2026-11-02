@@ -16,7 +16,7 @@ from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFil
 from app.core.config import APP_TIMEZONE, DEFAULT_SHIFT_END, DEFAULT_SHIFT_START, MONTHLY_PERMISSION_HOURS, REQUEST_NOTIFY_EMAILS, WORKING_DAYS_PER_MONTH
 from app.core.email import _cr_email_html, _request_email_html, _send_email
 from app.core.log import logger
-from app.core.permissions import MODULES, forbid_granted_on_admin, get_module_permissions, has_permission, require_any_view, require_permission
+from app.core.permissions import GRANTABLE_ROLES, MODULES, effective_module_permissions, forbid_granted_on_admin, get_module_permissions, has_permission, require_any_view, require_permission
 from app.core.security import get_current_user, hash_password, require_admin, verify_password
 from app.db import execute_query
 from app.schemas.admin import OfficeSettingsUpdate, OrgNodeCreate, OrgNodeUpdate, ResetPortalRequest
@@ -36,7 +36,7 @@ admin_router = APIRouter(prefix="/admin")
 async def get_all_employees(request: Request):
     viewer = await require_any_view(request, allow_manager=True)
     # Granted (non-admin) viewers only see salaries with Payroll view access
-    hide_salary = viewer.get("_granted") and not has_permission(await get_module_permissions(viewer["id"]), "payroll", "view")
+    hide_salary = viewer.get("_granted") and not has_permission(await effective_module_permissions(viewer), "payroll", "view")
     rows = await execute_query("SELECT id, email, name, role, department, position, avatar_url, created_at, casual_leave, sick_leave, loss_of_pay, permission_hours, half_day_leave, shift, basic_salary, employee_code, wfh_limit, gps_tracking_enabled, timer_access_enabled, full_day_required, reporting_manager_id, is_cr_approver, date_of_birth FROM users ORDER BY created_at DESC", fetch_all=True)
     result = []
     for emp in (rows or []):
@@ -397,6 +397,8 @@ async def set_employee_permissions(employee_id: str, request: Request):
     target = await execute_query("SELECT id, role FROM users WHERE id = %s", (int(employee_id),), fetch_one=True)
     if not target:
         raise HTTPException(status_code=404, detail="Employee not found")
+    if target["role"] not in GRANTABLE_ROLES:
+        raise HTTPException(status_code=400, detail="Management access can only be given to managers")
     await _replace_employee_permissions(int(employee_id), await request.json(), datetime.now(timezone.utc).isoformat())
     return {"message": "Permissions updated", "permissions": await get_module_permissions(int(employee_id))}
 
@@ -405,7 +407,7 @@ async def get_access_matrix(request: Request):
     """Every non-admin employee with their module grants (admins always have full access)."""
     await require_admin(request)
     users = await execute_query(
-        "SELECT id, name, email, role, department, employee_code, avatar_url FROM users WHERE role != 'admin' ORDER BY name",
+        "SELECT id, name, email, role, department, employee_code, avatar_url FROM users WHERE role = 'manager' ORDER BY name",
         fetch_all=True
     )
     rows = await execute_query("SELECT user_id, module, can_view, can_edit, can_delete FROM user_permissions", fetch_all=True)
@@ -426,7 +428,7 @@ async def save_access_matrix(request: Request):
     updated = 0
     for employee_id, grants in (body or {}).items():
         target = await execute_query("SELECT role FROM users WHERE id = %s", (int(employee_id),), fetch_one=True)
-        if not target or target["role"] == "admin":
+        if not target or target["role"] not in GRANTABLE_ROLES:
             continue
         await _replace_employee_permissions(int(employee_id), grants, now)
         updated += 1
