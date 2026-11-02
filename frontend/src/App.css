@@ -41,12 +41,12 @@
 
 /* Focus states */
 *:focus-visible {
-  outline: 2px solid #002FA7;
+  outline: 2px solid #0020F8;
   outline-offset: 2px;
 }
 
 /* Selection color */
 ::selection {
   background: #E5ECFF;
-  color: #002FA7;
+  color: #0020F8;
 }

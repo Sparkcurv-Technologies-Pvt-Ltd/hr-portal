@@ -1,10 +1,10 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
-import { ThemeProvider } from "./contexts/ThemeContext";
 import { Toaster } from "./components/ui/sonner";
 import LoginPage from "./pages/LoginPage";
 import EmployeeDashboard from "./pages/EmployeeDashboard";
 import AdminDashboard from "./pages/AdminDashboard";
+import { hasAnyModuleAccess } from "./lib/permissions";
 import "./App.css";
 
 const ProtectedRoute = ({ children, requireAdminOrManager = false }) => {
@@ -22,7 +22,7 @@ const ProtectedRoute = ({ children, requireAdminOrManager = false }) => {
     return <Navigate to="/login" replace />;
   }
 
-  if (requireAdminOrManager && user.role !== "admin") {
+  if (requireAdminOrManager && user.role !== "admin" && !hasAnyModuleAccess(user)) {
     return <Navigate to="/dashboard" replace />;
   }
 
@@ -49,7 +49,6 @@ const PublicRoute = ({ children }) => {
 
 function App() {
   return (
-    <ThemeProvider>
       <AuthProvider>
         <BrowserRouter>
           <Routes>
@@ -74,7 +73,6 @@ function App() {
         </BrowserRouter>
         <Toaster position="top-right" />
       </AuthProvider>
-    </ThemeProvider>
   );
 }
 

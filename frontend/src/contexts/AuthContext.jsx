@@ -1,15 +1,7 @@
 import { createContext, useContext, useState, useEffect } from "react";
-import axios from "axios";
+import { api } from "@/lib/api";
 
 const AuthContext = createContext(null);
-
-const API_URL = process.env.REACT_APP_BACKEND_URL;
-
-// Axios instance with credentials
-const api = axios.create({
-  baseURL: `${API_URL}/api`,
-  withCredentials: true,
-});
 
 function formatApiErrorDetail(detail) {
   if (detail == null) return "Something went wrong. Please try again.";

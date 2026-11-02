@@ -3,8 +3,8 @@ import { toast } from "sonner";
 import { Trash, Eye, EyeSlash } from "@phosphor-icons/react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription
-} from "./ui/dialog";
-import { Button } from "./ui/button";
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 
 export function ResetPortalButton({ api, onDone }) {
   const [open, setOpen] = useState(false);
@@ -37,31 +37,32 @@ export function ResetPortalButton({ api, onDone }) {
       <button
         data-testid="reset-portal-btn"
         onClick={handleOpen}
-        className="w-full mt-1 flex items-center gap-2 px-3 h-9 rounded-xl text-sm font-medium text-red-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+        className="w-full mt-1 flex items-center gap-2 px-3 h-9 rounded-xl text-sm font-medium text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors"
       >
         <Trash className="h-4 w-4" />
         Reset Portal Data
       </button>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="max-w-sm rounded-2xl">
           <DialogHeader>
-            <DialogTitle className="text-red-600 flex items-center gap-2">
-              <Trash className="h-5 w-5" /> Reset Portal Data
+            <DialogTitle className="flex items-center gap-2.5 font-['Outfit']">
+              <span className="stat-icon tone-red" style={{ width: 34, height: 34, borderRadius: 10 }}><Trash className="h-[18px] w-[18px]" weight="duotone" /></span>
+              Reset Portal Data
             </DialogTitle>
             <DialogDescription asChild>
-              <div className="space-y-3 pt-1 text-sm text-slate-600 dark:text-slate-400">
+              <div className="space-y-3 pt-1 text-sm text-slate-600">
                 <p>This will permanently delete:</p>
                 <ul className="list-disc pl-4 space-y-1">
                   <li>All employees (your account is kept)</li>
                   <li>All attendance, leave &amp; payroll records</li>
                   <li>All change requests and uploaded media</li>
                 </ul>
-                <p className="font-medium text-slate-700 dark:text-slate-300">
-                  Worker Tree data is <span className="text-green-600">preserved</span>.
+                <p className="font-medium text-slate-700">
+                  Worker Tree data is <span className="text-[color:var(--badge-green-text)]">preserved</span>.
                 </p>
                 <div className="pt-1">
-                  <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">
+                  <label className="block text-xs font-semibold text-slate-600 mb-1.5">
                     Confirm with your admin password
                   </label>
                   <div className="relative">
@@ -72,7 +73,7 @@ export function ResetPortalButton({ api, onDone }) {
                       onChange={e => { setPassword(e.target.value); setError(""); }}
                       onKeyDown={e => e.key === "Enter" && handleReset()}
                       placeholder="Enter your password"
-                      className="w-full border border-slate-300 dark:border-slate-600 rounded-lg px-3 py-2 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 bg-white dark:bg-slate-800 dark:text-white"
+                      className="w-full h-11 border border-slate-200 rounded-xl px-3 pr-10 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 bg-white"
                       autoFocus
                     />
                     <button
@@ -89,14 +90,14 @@ export function ResetPortalButton({ api, onDone }) {
             </DialogDescription>
           </DialogHeader>
           <div className="flex gap-2 pt-1">
-            <Button variant="outline" className="flex-1" onClick={() => setOpen(false)}>
+            <Button variant="outline" className="flex-1 h-11 rounded-xl" onClick={() => setOpen(false)}>
               Cancel
             </Button>
             <Button
               data-testid="reset-confirm-btn"
               disabled={!password || loading}
               onClick={handleReset}
-              className="flex-1 bg-red-600 hover:bg-red-700 text-white disabled:opacity-40"
+              className="flex-1 h-11 rounded-xl bg-[#DC2626] hover:bg-[#B91C1C] text-white disabled:opacity-40"
             >
               {loading ? "Resetting…" : "Reset Everything"}
             </Button>

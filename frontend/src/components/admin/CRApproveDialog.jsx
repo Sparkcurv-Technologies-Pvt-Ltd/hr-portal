@@ -1,10 +1,10 @@
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
-import { Button } from "./ui/button";
-import { Label } from "./ui/label";
-import { Input } from "./ui/input";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Check, X } from "@phosphor-icons/react";
-
-const AUTO_APPLY_TYPES = ["Salary Revision", "Leave Adjustment", "Shift Change"];
+import { CR_AUTO_APPLY_TYPES as AUTO_APPLY_TYPES } from "@/lib/constants";
+import { usePermissions } from "@/hooks/usePermissions";
 
 function parseMeta(metadata) {
   if (!metadata) return null;
@@ -16,28 +16,29 @@ function parseMeta(metadata) {
 }
 
 export function CRApproveDialog({ open, onOpenChange, cr, applyData, onApplyDataChange, onConfirm }) {
+  const { can } = usePermissions();
   if (!cr) return null;
   const meta = parseMeta(cr.metadata);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md rounded-2xl">
         <DialogHeader>
           <DialogTitle className="font-['Outfit']">Review &amp; Approve Change Request</DialogTitle>
         </DialogHeader>
         <div className="space-y-4 pt-2">
           {/* CR Details */}
-          <div className="bg-slate-50 rounded-xl p-4 space-y-2">
+          <div className="rounded-xl p-4 space-y-2 border" style={{ background: "var(--surface-elevated)", borderColor: "var(--border-color)" }}>
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-[#002FA7] font-semibold">{cr.cr_type}</span>
-              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                cr.priority === "high" ? "bg-red-50 text-red-600" :
-                cr.priority === "low" ? "bg-green-50 text-green-600" :
-                "bg-yellow-50 text-yellow-600"
-              }`}>{cr.priority}</span>
+              <span className="chip tone-blue">{cr.cr_type}</span>
+              <span className={`chip capitalize ${
+                cr.priority === "high" ? "tone-red" :
+                cr.priority === "low" ? "tone-green" :
+                "tone-amber"
+              }`}>{cr.priority} priority</span>
             </div>
-            <p className="font-semibold text-slate-900 text-sm">{cr.title}</p>
-            <p className="text-xs text-slate-500">{cr.description}</p>
+            <p className="font-bold text-slate-900 text-[15px] font-['Outfit'] pt-1">{cr.title}</p>
+            <p className="text-sm text-slate-600 leading-relaxed">{cr.description}</p>
             <p className="text-xs text-slate-400">
               Requested by: <span className="font-medium text-slate-600">{cr.requester_name}</span>
             </p>
@@ -51,7 +52,7 @@ export function CRApproveDialog({ open, onOpenChange, cr, applyData, onApplyData
           {/* Auto-apply value field */}
           {AUTO_APPLY_TYPES.includes(cr.cr_type) && (
             <div className="space-y-1.5">
-              <Label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+              <Label className="text-xs font-semibold text-slate-600">
                 {cr.cr_type === "Salary Revision" && "New Salary (₹)"}
                 {cr.cr_type === "Leave Adjustment" && "Casual Leave Days to Set"}
                 {cr.cr_type === "Shift Change" && "New Shift (HH:MM-HH:MM)"}
@@ -75,7 +76,7 @@ export function CRApproveDialog({ open, onOpenChange, cr, applyData, onApplyData
 
           {/* Notes */}
           <div className="space-y-1.5">
-            <Label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Admin Notes (optional)</Label>
+            <Label className="text-xs font-semibold text-slate-600">Admin Notes (optional)</Label>
             <Input
               data-testid="cr-admin-notes-input"
               placeholder="Add notes..."
@@ -86,23 +87,25 @@ export function CRApproveDialog({ open, onOpenChange, cr, applyData, onApplyData
           </div>
 
           {/* Actions */}
+          {can("change-requests", "edit") && (
           <div className="flex gap-3 pt-1">
             <Button
               data-testid="cr-confirm-approve-btn"
               onClick={() => onConfirm("approve")}
-              className="flex-1 bg-[#002FA7] hover:bg-[#001F70] text-white rounded-xl"
+              className="flex-1 h-11 bg-[#0020F8] hover:bg-[#0019C4] text-white rounded-xl"
             >
               <Check className="h-4 w-4 mr-2" /> Approve &amp; Apply
             </Button>
             <Button
               data-testid="cr-confirm-reject-btn"
-              variant="ghost"
+              variant="outline"
               onClick={() => onConfirm("reject")}
-              className="flex-1 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-xl border border-red-200"
+              className="flex-1 h-11 rounded-xl text-[color:var(--badge-red-text)] border-[color:var(--badge-red-border)] hover:bg-[var(--badge-red-bg)] hover:text-[color:var(--badge-red-text)]"
             >
               <X className="h-4 w-4 mr-2" /> Reject
             </Button>
           </div>
+          )}
         </div>
       </DialogContent>
     </Dialog>
