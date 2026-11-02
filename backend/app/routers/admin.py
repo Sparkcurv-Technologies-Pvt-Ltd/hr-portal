@@ -398,7 +398,7 @@ async def set_employee_permissions(employee_id: str, request: Request):
     if not target:
         raise HTTPException(status_code=404, detail="Employee not found")
     if target["role"] not in GRANTABLE_ROLES:
-        raise HTTPException(status_code=400, detail="Management access can only be given to managers")
+        raise HTTPException(status_code=400, detail="Admins already have full access")
     await _replace_employee_permissions(int(employee_id), await request.json(), datetime.now(timezone.utc).isoformat())
     return {"message": "Permissions updated", "permissions": await get_module_permissions(int(employee_id))}
 
@@ -407,7 +407,7 @@ async def get_access_matrix(request: Request):
     """Every non-admin employee with their module grants (admins always have full access)."""
     await require_admin(request)
     users = await execute_query(
-        "SELECT id, name, email, role, department, employee_code, avatar_url FROM users WHERE role = 'manager' ORDER BY name",
+        "SELECT id, name, email, role, department, employee_code, avatar_url FROM users WHERE role != 'admin' ORDER BY name",
         fetch_all=True
     )
     rows = await execute_query("SELECT user_id, module, can_view, can_edit, can_delete FROM user_permissions", fetch_all=True)

@@ -63,6 +63,11 @@ export function AccessMatrix({ api }) {
   // Header click: turn the action on for every visible row, or off if all already have it
   const toggleColumn = (module, action) => {
     const allOn = visible.length > 0 && visible.every(e => grid[e.id]?.[module]?.[action]);
+    // Granting to a whole column is the easiest way to give access by accident: confirm first
+    if (!allOn) {
+      const label = PERMISSION_MODULES.find(m => m.key === module)?.label || module;
+      if (!window.confirm(`Give ${ACTION_LABEL[action]} on ${label} to all ${visible.length} listed ${visible.length === 1 ? "person" : "people"}?`)) return;
+    }
     setGrid(prev => {
       const next = { ...prev };
       visible.forEach(e => { next[e.id] = { ...(next[e.id] || {}), [module]: setAction(next[e.id]?.[module], action, !allOn) }; });
@@ -94,7 +99,7 @@ export function AccessMatrix({ api }) {
         <div className="min-w-0">
           <h2 className="text-base font-bold font-['Outfit']" style={{ color: 'var(--text-primary)' }}>Access Matrix</h2>
           <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-            V = View, E = Edit, D = Delete. Edit or Delete includes View. Click a column letter to toggle it for every listed manager. Admins always have full access; employees never get management access.
+            V = View, E = Edit, D = Delete. Edit or Delete includes View. Click a column letter to toggle it for every listed person (you'll be asked to confirm). Nobody has access until you tick it. Admins always have full access.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
@@ -115,7 +120,9 @@ export function AccessMatrix({ api }) {
             className="h-9 rounded-lg border px-2.5 text-sm"
             style={{ borderColor: 'var(--border-color)', background: 'var(--surface)', color: 'var(--text-secondary)' }}
           >
-            <option value="all">All managers</option>
+            <option value="all">All roles</option>
+            <option value="employee">Employees</option>
+            <option value="manager">Managers</option>
           </select>
         </div>
       </div>
@@ -152,7 +159,7 @@ export function AccessMatrix({ api }) {
               <tr><td colSpan={PERMISSION_MODULES.length * 3 + 2} className="table-cell text-center py-10">Loading…</td></tr>
             )}
             {!loading && visible.length === 0 && (
-              <tr><td colSpan={PERMISSION_MODULES.length * 3 + 2} className="table-cell text-center py-10">No managers match.</td></tr>
+              <tr><td colSpan={PERMISSION_MODULES.length * 3 + 2} className="table-cell text-center py-10">No one matches.</td></tr>
             )}
             {!loading && visible.map(emp => (
               <tr key={emp.id} className="table-row">
@@ -198,8 +205,8 @@ export function AccessMatrix({ api }) {
       <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3.5" style={{ borderTop: '1px solid var(--border-subtle)' }}>
         <p className="text-xs" style={{ color: changedIds.length ? 'var(--badge-amber-text)' : 'var(--text-muted)' }} data-testid="access-matrix-status">
           {changedIds.length
-            ? `Unsaved changes for ${changedIds.length} manager${changedIds.length === 1 ? "" : "s"}`
-            : `${employees.length} manager${employees.length === 1 ? "" : "s"} · changes apply on their next login or reload`}
+            ? `Unsaved changes for ${changedIds.length} ${changedIds.length === 1 ? "person" : "people"}`
+            : `${employees.length} ${employees.length === 1 ? "person" : "people"} · changes apply on their next login or reload`}
         </p>
         <div className="flex gap-2">
           <Button

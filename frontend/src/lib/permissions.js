@@ -27,10 +27,10 @@ export function toggleAction(perm, action) {
   return next;
 }
 
-// Roles an admin can grant management modules to (employees never get management access)
-export const GRANTABLE_ROLES = ["manager"];
+// Roles an admin can grant management modules to (nothing is granted by default)
+export const GRANTABLE_ROLES = ["manager", "employee"];
 
-// Admins can do everything; managers need the flag in user.module_permissions.
+// Admins can do everything; others need the flag an admin saved in user.module_permissions.
 // Edit or delete implies view.
 export function canDo(user, module, action = "view") {
   if (!user) return false;
@@ -42,7 +42,7 @@ export function canDo(user, module, action = "view") {
   return !!perm[action];
 }
 
-// True when the user can open at least one management module (managers with grants)
+// True when the user can open at least one management module (non-admins an admin granted access)
 export function hasAnyModuleAccess(user) {
   return PERMISSION_MODULES.some(m => canDo(user, m.key, "view"));
 }
