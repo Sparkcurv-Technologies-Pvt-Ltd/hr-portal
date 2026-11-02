@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { MagnifyingGlass, ArrowCounterClockwise, FloppyDisk } from "@phosphor-icons/react";
+import { MagnifyingGlass, ArrowCounterClockwise, FloppyDisk, LockSimple } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar } from "@/components/common/Avatar";
@@ -62,15 +62,17 @@ export function AccessMatrix({ api }) {
 
   // Header click: turn the action on for every visible row, or off if all already have it
   const toggleColumn = (module, action) => {
-    const allOn = visible.length > 0 && visible.every(e => grid[e.id]?.[module]?.[action]);
+    const targets = visible.filter(e => e.grantable);
+    if (targets.length === 0) return;
+    const allOn = targets.every(e => grid[e.id]?.[module]?.[action]);
     // Granting to a whole column is the easiest way to give access by accident: confirm first
     if (!allOn) {
       const label = PERMISSION_MODULES.find(m => m.key === module)?.label || module;
-      if (!window.confirm(`Give ${ACTION_LABEL[action]} on ${label} to all ${visible.length} listed ${visible.length === 1 ? "person" : "people"}?`)) return;
+      if (!window.confirm(`Give ${ACTION_LABEL[action]} on ${label} to all ${targets.length} listed ${targets.length === 1 ? "manager" : "managers"}?`)) return;
     }
     setGrid(prev => {
       const next = { ...prev };
-      visible.forEach(e => { next[e.id] = { ...(next[e.id] || {}), [module]: setAction(next[e.id]?.[module], action, !allOn) }; });
+      targets.forEach(e => { next[e.id] = { ...(next[e.id] || {}), [module]: setAction(next[e.id]?.[module], action, !allOn) }; });
       return next;
     });
   };
@@ -99,7 +101,7 @@ export function AccessMatrix({ api }) {
         <div className="min-w-0">
           <h2 className="text-base font-bold font-['Outfit']" style={{ color: 'var(--text-primary)' }}>Access Matrix</h2>
           <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-            V = View, E = Edit, D = Delete. Edit or Delete includes View. Click a column letter to toggle it for every listed person (you'll be asked to confirm). Nobody has access until you tick it. Admins always have full access.
+            V = View, E = Edit, D = Delete. Edit or Delete includes View. Click a column letter to toggle it for every listed manager (you'll be asked to confirm). Only managers can be given access, and only what you tick. Employees never get management access; admins always have full access.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
@@ -174,27 +176,39 @@ export function AccessMatrix({ api }) {
                     </div>
                   </div>
                 </td>
-                {PERMISSION_MODULES.map((m, i) => {
-                  const cur = { ...NO_ACCESS, ...(grid[emp.id]?.[m.key] || {}) };
-                  const was = { ...NO_ACCESS, ...(original[emp.id]?.[m.key] || {}) };
-                  return PERMISSION_ACTIONS.map(a => (
-                    <td key={`${m.key}-${a}`} className={`matrix-cell ${a === "view" ? "matrix-group" : ""} ${i % 2 ? "matrix-alt" : ""} ${cur[a] !== was[a] ? "matrix-dirty" : ""}`}>
-                      <input
-                        type="checkbox"
-                        data-testid={`matrix-${emp.id}-${m.key}-${a}`}
-                        aria-label={`${emp.name}: ${m.label} ${ACTION_LABEL[a]}`}
-                        checked={cur[a]}
-                        onChange={() => updateCell(emp.id, m.key, p => toggleAction(p, a))}
-                      />
-                    </td>
-                  ));
-                })}
-                <td className="matrix-cell">
-                  <div className="flex items-center justify-center gap-1">
-                    <button type="button" className="matrix-row-btn" data-testid={`matrix-row-all-${emp.id}`} onClick={() => setRow(emp.id, true)}>All</button>
-                    <button type="button" className="matrix-row-btn" data-testid={`matrix-row-none-${emp.id}`} onClick={() => setRow(emp.id, false)}>None</button>
-                  </div>
-                </td>
+                {!emp.grantable ? (
+                  // Employees can never hold management access: show the row locked
+                  <td colSpan={PERMISSION_MODULES.length * 3 + 1} className="matrix-cell text-left" data-testid={`matrix-locked-${emp.id}`}>
+                    <span className="inline-flex items-center gap-1.5 text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
+                      <LockSimple className="h-3.5 w-3.5" weight="bold" />
+                      Employees can't get management access — make them a manager to grant it
+                    </span>
+                  </td>
+                ) : (
+                  <>
+                  {PERMISSION_MODULES.map((m, i) => {
+                    const cur = { ...NO_ACCESS, ...(grid[emp.id]?.[m.key] || {}) };
+                    const was = { ...NO_ACCESS, ...(original[emp.id]?.[m.key] || {}) };
+                    return PERMISSION_ACTIONS.map(a => (
+                      <td key={`${m.key}-${a}`} className={`matrix-cell ${a === "view" ? "matrix-group" : ""} ${i % 2 ? "matrix-alt" : ""} ${cur[a] !== was[a] ? "matrix-dirty" : ""}`}>
+                        <input
+                          type="checkbox"
+                          data-testid={`matrix-${emp.id}-${m.key}-${a}`}
+                          aria-label={`${emp.name}: ${m.label} ${ACTION_LABEL[a]}`}
+                          checked={cur[a]}
+                          onChange={() => updateCell(emp.id, m.key, p => toggleAction(p, a))}
+                        />
+                      </td>
+                    ));
+                  })}
+                  <td className="matrix-cell">
+                    <div className="flex items-center justify-center gap-1">
+                      <button type="button" className="matrix-row-btn" data-testid={`matrix-row-all-${emp.id}`} onClick={() => setRow(emp.id, true)}>All</button>
+                      <button type="button" className="matrix-row-btn" data-testid={`matrix-row-none-${emp.id}`} onClick={() => setRow(emp.id, false)}>None</button>
+                    </div>
+                  </td>
+                  </>
+                )}
               </tr>
             ))}
           </tbody>

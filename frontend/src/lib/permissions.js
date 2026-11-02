@@ -27,8 +27,8 @@ export function toggleAction(perm, action) {
   return next;
 }
 
-// Roles an admin can grant management modules to (nothing is granted by default)
-export const GRANTABLE_ROLES = ["manager", "employee"];
+// Roles an admin can grant management modules to (nothing by default; employees never)
+export const GRANTABLE_ROLES = ["manager"];
 
 // Admins can do everything; others need the flag an admin saved in user.module_permissions.
 // Edit or delete implies view.

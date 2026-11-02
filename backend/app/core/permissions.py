@@ -1,7 +1,8 @@
 """Per-employee module permissions (View / Edit / Delete), granted by admins.
 
-Admins always have full access. Managers and employees get only what an admin has
-explicitly saved for them in ``user_permissions`` (nothing by default). Module keys match the admin panel tabs and
+Admins always have full access. Managers get only what an admin has explicitly saved for
+them in ``user_permissions`` (nothing by default). Employees never get management access,
+whatever is stored for them. Module keys match the admin panel tabs and
 ``frontend/src/lib/permissions.js``.
 """
 
@@ -31,11 +32,11 @@ async def get_module_permissions(user_id: int) -> dict:
 
 
 # Roles that can be granted management-panel modules (admins already have everything)
-GRANTABLE_ROLES = ("manager", "employee")
+GRANTABLE_ROLES = ("manager",)
 
 
 async def effective_module_permissions(user: dict) -> dict:
-    """Grants that apply to this user (only grantable roles)."""
+    """Grants that apply to this user: none for employees."""
     if user.get("role") not in GRANTABLE_ROLES:
         return {}
     return await get_module_permissions(user["id"])

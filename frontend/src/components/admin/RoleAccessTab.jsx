@@ -24,7 +24,7 @@ export function RoleAccessTab({ api, rolePerms, setRolePerms, rolePermsLoading, 
       <div className="flex items-end justify-between mb-6">
         <div>
           <h1 className="font-bold text-slate-900 font-['Outfit'] tracking-tight">Role Access Control</h1>
-          <p className="text-slate-500 mt-1 text-sm">Grant managers or employees View, Edit or Delete access per module, and choose which portal tabs each role sees</p>
+          <p className="text-slate-500 mt-1 text-sm">Grant managers View, Edit or Delete access per module (employees never get management access), and choose which portal tabs each role sees</p>
         </div>
       </div>
 
