@@ -8,6 +8,7 @@ import {
 } from "@phosphor-icons/react";
 import { Avatar } from "@/components/common/Avatar";
 import { MobileTopBar } from "@/components/common/MobileTopBar";
+import { ResetPortalButton } from "@/components/admin/ResetPortalButton";
 import { SidebarBrand } from "@/components/common/SidebarBrand";
 import { SidebarCollapseToggle } from "@/components/common/SidebarCollapseToggle";
 
@@ -179,6 +180,10 @@ export function AdminSidebar({
               <ArrowLeft className="h-4 w-4" />
               {!sidebarCollapsed && "My Dashboard"}
             </Button>
+          )}
+          {/* Superadmin only (e.g. ponish.jino) */}
+          {user?.is_superadmin && !sidebarCollapsed && (
+            <ResetPortalButton api={api} onDone={() => { fetchData(); }} />
           )}
         </div>
       </aside>

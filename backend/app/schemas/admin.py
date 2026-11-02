@@ -33,3 +33,7 @@ class OrgNodeUpdate(BaseModel):
     level_num: Optional[int] = None
     sort_order: Optional[int] = None
 
+
+# ── Superadmin Reset ──────────────────────────────────────────────────────────
+class ResetPortalRequest(BaseModel):
+    password: str

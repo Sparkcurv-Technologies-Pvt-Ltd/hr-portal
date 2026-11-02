@@ -7,7 +7,7 @@ import bcrypt
 import jwt
 from fastapi import HTTPException, Request
 
-from app.core.config import JWT_ALGORITHM
+from app.core.config import JWT_ALGORITHM, SUPERADMIN_EMAILS
 from app.db import execute_query
 
 
@@ -72,6 +72,15 @@ async def require_admin(request: Request) -> dict:
     user = await get_current_user(request)
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
+    return user
+
+def is_superadmin(user: dict) -> bool:
+    return user.get("role") == "admin" and (user.get("email") or "").lower() in SUPERADMIN_EMAILS
+
+async def require_superadmin(request: Request) -> dict:
+    user = await get_current_user(request)
+    if not is_superadmin(user):
+        raise HTTPException(status_code=403, detail="Only the superadmin can do this")
     return user
 
 async def require_admin_or_manager(request: Request) -> dict:

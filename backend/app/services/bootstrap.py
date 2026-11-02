@@ -462,6 +462,16 @@ async def startup():
             except Exception as e:
                 logger.warning(f"Could not add full_day_required column: {e}")
 
+        # Migration: who granted each management permission (employees' grants count only from a superadmin)
+        try:
+            await execute_query("SELECT granted_by FROM user_permissions LIMIT 1", fetch_one=True)
+        except Exception:
+            try:
+                await execute_query("ALTER TABLE user_permissions ADD COLUMN granted_by INT DEFAULT NULL")
+                logger.info("Added granted_by column to user_permissions")
+            except Exception as e:
+                logger.warning(f"Could not add granted_by to user_permissions: {e}")
+
         # Migration: vault editors (employees allowed to add credentials and manage the ones they create)
         for table, column, ddl in (("users", "vault_editor", "TINYINT(1) DEFAULT 0"), ("vault_items", "owner_id", "INT DEFAULT NULL")):
             try:

@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 
 from app.core.config import COOKIE_SAMESITE, COOKIE_SECURE, MONTHLY_PERMISSION_HOURS
 from app.core.permissions import effective_module_permissions
-from app.core.security import create_access_token, create_refresh_token, get_current_user, hash_password, verify_password
+from app.core.security import create_access_token, create_refresh_token, get_current_user, hash_password, is_superadmin, verify_password
 from app.db import execute_query
 from app.schemas.auth import UserLogin, UserRegister
 
@@ -58,7 +58,7 @@ async def login(user_data: UserLogin, response: Response):
     response.set_cookie(key="access_token", value=access_token, httponly=True, secure=COOKIE_SECURE, samesite=COOKIE_SAMESITE, max_age=3600, path="/")
     response.set_cookie(key="refresh_token", value=refresh_token, httponly=True, secure=COOKIE_SECURE, samesite=COOKIE_SAMESITE, max_age=604800, path="/")
 
-    return {"id": str(user["id"]), "email": email, "name": user["name"], "role": user["role"], "department": user.get("department", "General"), "position": user.get("position", "Employee"), "avatar_url": user.get("avatar_url"), "employee_code": user.get("employee_code", ""), "gps_tracking_enabled": bool(int(user["gps_tracking_enabled"]) if user.get("gps_tracking_enabled") is not None else 1), "timer_access_enabled": bool(int(user["timer_access_enabled"]) if user.get("timer_access_enabled") is not None else 0), "module_permissions": await effective_module_permissions(user), "vault_access": await _has_vault_access(user), "vault_editor": bool(user.get("vault_editor"))}
+    return {"id": str(user["id"]), "email": email, "name": user["name"], "role": user["role"], "department": user.get("department", "General"), "position": user.get("position", "Employee"), "avatar_url": user.get("avatar_url"), "employee_code": user.get("employee_code", ""), "gps_tracking_enabled": bool(int(user["gps_tracking_enabled"]) if user.get("gps_tracking_enabled") is not None else 1), "timer_access_enabled": bool(int(user["timer_access_enabled"]) if user.get("timer_access_enabled") is not None else 0), "module_permissions": await effective_module_permissions(user), "vault_access": await _has_vault_access(user), "vault_editor": bool(user.get("vault_editor")), "is_superadmin": is_superadmin(user)}
 
 @auth_router.post("/logout")
 async def logout(response: Response):
@@ -76,6 +76,7 @@ async def get_me(request: Request):
     user["module_permissions"] = await effective_module_permissions(user)
     user["vault_access"] = await _has_vault_access(user)
     user["vault_editor"] = bool(user.get("vault_editor"))
+    user["is_superadmin"] = is_superadmin(user)
     return user
 
 @auth_router.get("/password-reset-info")

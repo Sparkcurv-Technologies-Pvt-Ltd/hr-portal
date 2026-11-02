@@ -68,7 +68,7 @@ export function AccessMatrix({ api }) {
     // Granting to a whole column is the easiest way to give access by accident: confirm first
     if (!allOn) {
       const label = PERMISSION_MODULES.find(m => m.key === module)?.label || module;
-      if (!window.confirm(`Give ${ACTION_LABEL[action]} on ${label} to all ${targets.length} listed ${targets.length === 1 ? "manager" : "managers"}?`)) return;
+      if (!window.confirm(`Give ${ACTION_LABEL[action]} on ${label} to all ${targets.length} listed ${targets.length === 1 ? "person" : "people"}?`)) return;
     }
     setGrid(prev => {
       const next = { ...prev };
@@ -101,7 +101,7 @@ export function AccessMatrix({ api }) {
         <div className="min-w-0">
           <h2 className="text-base font-bold font-['Outfit']" style={{ color: 'var(--text-primary)' }}>Access Matrix</h2>
           <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
-            V = View, E = Edit, D = Delete. Edit or Delete includes View. Click a column letter to toggle it for every listed manager (you'll be asked to confirm). Only managers can be given access, and only what you tick. Employees never get management access; admins always have full access.
+            V = View, E = Edit, D = Delete. Edit or Delete includes View. Click a column letter to toggle it for every listed person you can edit (you'll be asked to confirm). Nobody has access until you tick it. Only the superadmin can give employees access; admins always have full access.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
@@ -177,11 +177,11 @@ export function AccessMatrix({ api }) {
                   </div>
                 </td>
                 {!emp.grantable ? (
-                  // Employees can never hold management access: show the row locked
+                  // Only the superadmin can grant employees: other admins see the row locked
                   <td colSpan={PERMISSION_MODULES.length * 3 + 1} className="matrix-cell text-left" data-testid={`matrix-locked-${emp.id}`}>
                     <span className="inline-flex items-center gap-1.5 text-xs font-medium" style={{ color: 'var(--text-muted)' }}>
                       <LockSimple className="h-3.5 w-3.5" weight="bold" />
-                      Employees can't get management access — make them a manager to grant it
+                      Only the superadmin can give employees management access
                     </span>
                   </td>
                 ) : (

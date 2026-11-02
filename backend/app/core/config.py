@@ -35,6 +35,8 @@ _request_emails_raw = os.environ.get(
     "ponish.jino@sparkcurv.com,Jebin.s@sparkcurv.com,ranjith.m@sparkcurv.com,senthil@sparkcurv.com,arun@sparkcurv.com",
 )
 REQUEST_NOTIFY_EMAILS = [e.strip() for e in _request_emails_raw.split(",") if e.strip()]
+# Superadmins: admins with full access, including Reset Portal Data (comma-separated override in .env)
+SUPERADMIN_EMAILS = {e.strip().lower() for e in os.environ.get("SUPERADMIN_EMAILS", "ponish.jino@sparkcurv.com").split(",") if e.strip()}
 
 ROOT_DIR = Path(__file__).parent.parent.parent  # backend/ (the directory server.py lives in)
 

@@ -16,10 +16,10 @@ from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFil
 from app.core.config import APP_TIMEZONE, DEFAULT_SHIFT_END, DEFAULT_SHIFT_START, MONTHLY_PERMISSION_HOURS, REQUEST_NOTIFY_EMAILS, WORKING_DAYS_PER_MONTH
 from app.core.email import _cr_email_html, _request_email_html, _send_email
 from app.core.log import logger
-from app.core.permissions import GRANTABLE_ROLES, MODULES, effective_module_permissions, forbid_granted_on_admin, get_module_permissions, has_permission, require_any_view, require_permission
-from app.core.security import get_current_user, hash_password, require_admin
+from app.core.permissions import GRANTABLE_ROLES, MODULES, can_grant, effective_module_permissions, forbid_granted_on_admin, superadmin_ids, has_permission, require_any_view, require_permission
+from app.core.security import get_current_user, hash_password, is_superadmin, require_admin, require_superadmin, verify_password
 from app.db import execute_query
-from app.schemas.admin import OfficeSettingsUpdate, OrgNodeCreate, OrgNodeUpdate
+from app.schemas.admin import OfficeSettingsUpdate, OrgNodeCreate, OrgNodeUpdate, ResetPortalRequest
 from app.schemas.auth import UserRegister
 from app.schemas.employees import EmployeeUpdate, PasswordReset, SalaryUpdate, ShiftAssign
 from app.schemas.leave import LeaveBalanceUpdate
@@ -374,9 +374,11 @@ async def upload_org_node_image(node_id: int, file: UploadFile = File(...), requ
 @admin_router.get("/employees/{employee_id}/permissions")
 async def get_employee_permissions(employee_id: str, request: Request):
     await require_admin(request)
-    return {"modules": MODULES, "permissions": await get_module_permissions(int(employee_id))}
+    target = await execute_query("SELECT id, role FROM users WHERE id = %s", (int(employee_id),), fetch_one=True)
+    perms = await effective_module_permissions(target) if target else {}
+    return {"modules": MODULES, "permissions": perms}
 
-async def _replace_employee_permissions(employee_id: int, grants: dict, now: str) -> None:
+async def _replace_employee_permissions(employee_id: int, grants: dict, now: str, granted_by: int) -> None:
     """Replace one employee's grants. ``grants``: {module: {view, edit, delete}}; edit/delete imply view."""
     await execute_query("DELETE FROM user_permissions WHERE user_id = %s", (employee_id,))
     for module, flags in (grants or {}).items():
@@ -386,53 +388,61 @@ async def _replace_employee_permissions(employee_id: int, grants: dict, now: str
         can_view = bool(flags.get("view")) or can_edit or can_delete
         if can_view:
             await execute_query(
-                "INSERT INTO user_permissions (user_id, module, can_view, can_edit, can_delete, updated_at) VALUES (%s, %s, %s, %s, %s, %s)",
-                (employee_id, module, int(can_view), int(can_edit), int(can_delete), now)
+                "INSERT INTO user_permissions (user_id, module, can_view, can_edit, can_delete, granted_by, updated_at) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                (employee_id, module, int(can_view), int(can_edit), int(can_delete), granted_by, now)
             )
 
 @admin_router.put("/employees/{employee_id}/permissions")
 async def set_employee_permissions(employee_id: str, request: Request):
     """Replace one employee's grants. Body: {module: {view, edit, delete}}."""
-    await require_admin(request)
+    admin = await require_admin(request)
     target = await execute_query("SELECT id, role FROM users WHERE id = %s", (int(employee_id),), fetch_one=True)
     if not target:
         raise HTTPException(status_code=404, detail="Employee not found")
     if target["role"] not in GRANTABLE_ROLES:
-        raise HTTPException(status_code=400, detail="Employees can't get management access — make them a manager first")
-    await _replace_employee_permissions(int(employee_id), await request.json(), datetime.now(timezone.utc).isoformat())
-    return {"message": "Permissions updated", "permissions": await get_module_permissions(int(employee_id))}
+        raise HTTPException(status_code=400, detail="Admins already have full access")
+    if not can_grant(admin, target["role"]):
+        raise HTTPException(status_code=403, detail="Only the superadmin can give employees management access")
+    await _replace_employee_permissions(int(employee_id), await request.json(), datetime.now(timezone.utc).isoformat(), admin["id"])
+    return {"message": "Permissions updated", "permissions": await effective_module_permissions(target)}
 
 @admin_router.get("/access-matrix")
 async def get_access_matrix(request: Request):
     """Every non-admin employee with their module grants (admins always have full access)."""
-    await require_admin(request)
+    caller = await require_admin(request)
     users = await execute_query(
         "SELECT id, name, email, role, department, employee_code, avatar_url FROM users WHERE role != 'admin' ORDER BY name",
         fetch_all=True
     )
-    rows = await execute_query("SELECT user_id, module, can_view, can_edit, can_delete FROM user_permissions", fetch_all=True)
+    sa_ids = set(await superadmin_ids())
+    rows = await execute_query("SELECT user_id, module, can_view, can_edit, can_delete, granted_by FROM user_permissions", fetch_all=True)
+    roles = {u["id"]: u["role"] for u in (users or [])}
     grants = {}
     for r in (rows or []):
+        # employees' grants only count when a superadmin made them (matches effective_module_permissions)
+        if roles.get(r["user_id"]) == "employee" and r["granted_by"] not in sa_ids:
+            continue
         grants.setdefault(r["user_id"], {})[r["module"]] = {"view": bool(r["can_view"]), "edit": bool(r["can_edit"]), "delete": bool(r["can_delete"])}
     return {
         "modules": MODULES,
+        "caller_is_superadmin": is_superadmin(caller),
         "employees": [{**{k: u[k] for k in ("name", "email", "role", "department", "employee_code", "avatar_url")}, "id": str(u["id"]),
-                       "grantable": u["role"] in GRANTABLE_ROLES,
-                       "permissions": grants.get(u["id"], {}) if u["role"] in GRANTABLE_ROLES else {}} for u in (users or [])],
+                       "grantable": can_grant(caller, u["role"]),
+                       "permissions": grants.get(u["id"], {})} for u in (users or [])],
     }
 
 @admin_router.put("/access-matrix")
 async def save_access_matrix(request: Request):
     """Bulk replace grants. Body: {employee_id: {module: {view, edit, delete}}} — only listed employees change."""
-    await require_admin(request)
+    caller = await require_admin(request)
     body = await request.json()
     now = datetime.now(timezone.utc).isoformat()
     updated = 0
     for employee_id, grants in (body or {}).items():
         target = await execute_query("SELECT role FROM users WHERE id = %s", (int(employee_id),), fetch_one=True)
-        if not target or target["role"] not in GRANTABLE_ROLES:
+        if not target or not can_grant(caller, target["role"]):
             continue
-        await _replace_employee_permissions(int(employee_id), grants, now)
+        await _replace_employee_permissions(int(employee_id), grants, now, caller["id"])
         updated += 1
     return {"message": f"Access updated for {updated} employee{'s' if updated != 1 else ''}", "updated": updated}
 
@@ -1274,3 +1284,41 @@ async def get_attendance_locations(request: Request, date: str = None):
         d["user_id"] = str(d["user_id"])
         result.append(d)
     return result
+
+
+@admin_router.post("/reset-portal")
+async def reset_portal(body: ResetPortalRequest, request: Request):
+    """Superadmin only. Deletes ALL data except the superadmin/HR admin accounts, the caller and the
+    Worker Tree. Requires the caller's password."""
+    user = await require_superadmin(request)
+    admin_id = user.get("id")
+
+    # Verify password before proceeding
+    db_user = await execute_query("SELECT password_hash FROM users WHERE id = %s", (int(admin_id),), fetch_one=True)
+    if not db_user or not verify_password(body.password, db_user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Incorrect password. Reset cancelled.")
+
+    tables_to_clear = [
+        "attendance", "breaks", "leave_requests", "wfh_requests",
+        "permissions", "payslips", "leave_deductions", "custom_deductions",
+        "payroll_runs", "change_requests", "media",
+    ]
+    for table in tables_to_clear:
+        try:
+            await execute_query(f"DELETE FROM `{table}`", ())
+        except Exception as e:
+            logging.warning(f"Reset: could not clear {table}: {e}")
+
+    try:
+        await execute_query(
+            "DELETE FROM users WHERE id != %s AND email NOT IN ('ponish.jino@sparkcurv.com', 'hr@sparkcurv.com')",
+            (int(admin_id),)
+        )
+        # Access grants must not outlive the deleted accounts
+        await execute_query("DELETE FROM user_permissions WHERE user_id NOT IN (SELECT id FROM users)")
+        await execute_query("DELETE FROM vault_shares WHERE user_id NOT IN (SELECT id FROM users)")
+    except Exception as e:
+        logging.warning(f"Reset: could not clear users: {e}")
+
+    logging.info(f"Portal reset by superadmin id={admin_id}")
+    return {"message": "Portal reset complete. All employee data cleared. Worker Tree and your account are preserved."}

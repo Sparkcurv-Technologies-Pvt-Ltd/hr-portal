@@ -1,14 +1,15 @@
 """Per-employee module permissions (View / Edit / Delete), granted by admins.
 
 Admins always have full access. Managers get only what an admin has explicitly saved for
-them in ``user_permissions`` (nothing by default). Employees never get management access,
-whatever is stored for them. Module keys match the admin panel tabs and
+them in ``user_permissions`` (nothing by default). Employees get management access only
+from grants made by a superadmin (SUPERADMIN_EMAILS); anything else stored for them is ignored. Module keys match the admin panel tabs and
 ``frontend/src/lib/permissions.js``.
 """
 
 from fastapi import HTTPException, Request
 
-from app.core.security import get_current_user
+from app.core.config import SUPERADMIN_EMAILS
+from app.core.security import get_current_user, is_superadmin
 from app.db import execute_query
 
 
@@ -19,12 +20,22 @@ MODULES = [
 ACTIONS = ("view", "edit", "delete")
 
 
-async def get_module_permissions(user_id: int) -> dict:
-    """``{module: {"view": bool, "edit": bool, "delete": bool}}`` for one user (only modules with a row)."""
-    rows = await execute_query(
-        "SELECT module, can_view, can_edit, can_delete FROM user_permissions WHERE user_id = %s",
-        (int(user_id),), fetch_all=True
-    )
+async def superadmin_ids() -> list:
+    rows = await execute_query("SELECT id, email FROM users WHERE role = 'admin'", fetch_all=True)
+    return [r["id"] for r in (rows or []) if (r["email"] or "").lower() in SUPERADMIN_EMAILS]
+
+
+async def get_module_permissions(user_id: int, granted_by_in: list = None) -> dict:
+    """``{module: {"view": bool, "edit": bool, "delete": bool}}`` for one user (only modules with a row).
+    ``granted_by_in`` limits it to grants made by those users."""
+    if granted_by_in is not None and not granted_by_in:
+        return {}
+    query = "SELECT module, can_view, can_edit, can_delete FROM user_permissions WHERE user_id = %s"
+    args = [int(user_id)]
+    if granted_by_in is not None:
+        query += f" AND granted_by IN ({', '.join(['%s'] * len(granted_by_in))})"
+        args += list(granted_by_in)
+    rows = await execute_query(query, tuple(args), fetch_all=True)
     return {
         r["module"]: {"view": bool(r["can_view"]), "edit": bool(r["can_edit"]), "delete": bool(r["can_delete"])}
         for r in (rows or [])
@@ -32,14 +43,26 @@ async def get_module_permissions(user_id: int) -> dict:
 
 
 # Roles that can be granted management-panel modules (admins already have everything)
-GRANTABLE_ROLES = ("manager",)
+GRANTABLE_ROLES = ("manager", "employee")
+
+
+def can_grant(granter: dict, target_role: str) -> bool:
+    """Any admin can grant managers; only a superadmin can grant employees."""
+    if target_role == "manager":
+        return granter.get("role") == "admin"
+    if target_role == "employee":
+        return is_superadmin(granter)
+    return False
 
 
 async def effective_module_permissions(user: dict) -> dict:
-    """Grants that apply to this user: none for employees."""
-    if user.get("role") not in GRANTABLE_ROLES:
-        return {}
-    return await get_module_permissions(user["id"])
+    """Grants that apply to this user: managers' as saved; employees' only if a superadmin granted them."""
+    role = user.get("role")
+    if role == "manager":
+        return await get_module_permissions(user["id"])
+    if role == "employee":
+        return await get_module_permissions(user["id"], granted_by_in=await superadmin_ids())
+    return {}
 
 
 def has_permission(perms: dict, module: str, action: str) -> bool:
