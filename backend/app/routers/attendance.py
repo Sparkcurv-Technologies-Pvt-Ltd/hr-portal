@@ -62,10 +62,13 @@ async def clock_in(request: Request):
         raise HTTPException(status_code=400, detail=f"Cannot log in: {location_type}. You must be at the office or have approved WFH.")
 
     existing = await execute_query(
-        "SELECT id FROM attendance WHERE user_id = %s AND date = %s AND clock_out IS NULL", (user["id"], today), fetch_one=True
+        "SELECT id, clock_out FROM attendance WHERE user_id = %s AND date = %s ORDER BY id DESC LIMIT 1", (user["id"], today), fetch_one=True
     )
-    if existing:
+    # One Login and one Logout per day
+    if existing and existing["clock_out"] is None:
         raise HTTPException(status_code=400, detail="Already logged in")
+    if existing:
+        raise HTTPException(status_code=400, detail="You've already logged in and out today. You can log in again tomorrow.")
 
     # Reverse geocode (skip for WFH with no location)
     address = await reverse_geocode(lat, lng) if (lat != 0.0 or lng != 0.0) else "Work From Home"

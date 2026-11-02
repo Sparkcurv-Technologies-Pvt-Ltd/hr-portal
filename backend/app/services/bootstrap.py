@@ -10,6 +10,7 @@ from app.core.security import hash_password
 from app.db import execute_query, get_pool
 from app.services.media import _save_image_db
 from app.services.payroll import _payslip_scheduler_loop
+from app.services.reminders import start_reminder_scheduler
 
 
 async def init_database():
@@ -333,6 +334,15 @@ async def init_database():
                     ip VARCHAR(64) DEFAULT '',
                     created_at VARCHAR(64),
                     INDEX idx_vault_audit_item (item_id)
+                )
+            """)
+            await cur.execute("""
+                CREATE TABLE IF NOT EXISTS reminder_log (
+                    user_id INT NOT NULL,
+                    date VARCHAR(10) NOT NULL,
+                    kind VARCHAR(20) NOT NULL,
+                    sent_at VARCHAR(64),
+                    PRIMARY KEY (user_id, date, kind)
                 )
             """)
             await cur.execute("""
@@ -757,6 +767,7 @@ async def startup():
             logger.info("Default company policies seeded")
 
         asyncio.create_task(_payslip_scheduler_loop())
+        start_reminder_scheduler()
         logger.info("Payslip auto-generation scheduler started (runs daily, generates previous month's payslips on/after the 1st)")
 
     except Exception as e:

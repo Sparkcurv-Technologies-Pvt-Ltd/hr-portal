@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import {
   Clock, SignOut, Warning, Laptop, MapPin, WifiNone,
-  Timer, PlayCircle, StopCircle, Pause, Play, FirstAidKit, SignIn
+  Timer, PlayCircle, StopCircle, Pause, Play, FirstAidKit, SignIn, CheckCircle
 } from "@phosphor-icons/react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -262,6 +262,8 @@ export function TimeTrackerCard({ user, api }) {
   const permissionMinutesToday = attendanceStatus.permission_minutes_today || 0;
   const isShortDay = currentWorkingHours < requiredHours && attendanceStatus.clocked_in;
   const onPause = attendanceStatus.on_pause;
+  // Logged in and out already today (one Login + one Logout per day)
+  const dayComplete = !attendanceStatus.clocked_in && !!attendanceStatus.attendance?.clock_out;
   // Admin can switch the 8-hour Logout rule off per employee
   const fullDayRequired = attendanceStatus.full_day_required !== false;
 
@@ -274,7 +276,9 @@ export function TimeTrackerCard({ user, api }) {
     ? { tone: "tone-teal", label: "Paused", pulse: false }
     : attendanceStatus.clocked_in
       ? { tone: "tone-green", label: "Logged in", pulse: true }
-      : { tone: "", label: "Not logged in", pulse: false };
+      : dayComplete
+        ? { tone: "tone-blue", label: "Logged out", pulse: false }
+        : { tone: "", label: "Not logged in", pulse: false };
   const timerColor = onPause ? "var(--tone)" : "var(--text-primary)";
 
   const fmtClock = (iso) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -326,13 +330,13 @@ export function TimeTrackerCard({ user, api }) {
         }}
       >
         <p className="text-[11px] font-bold uppercase tracking-[0.12em]" style={{ color: onPause ? 'var(--tone)' : 'var(--text-muted)' }}>
-          {onPause ? "Paused (Travel/Away)" : attendanceStatus.clocked_in ? "Logged In Time" : "Not Logged In"}
+          {onPause ? "Paused (Travel/Away)" : attendanceStatus.clocked_in ? "Logged In Time" : dayComplete ? "Worked Today" : "Not Logged In"}
         </p>
         <div
           className="font-['JetBrains_Mono'] font-medium text-[44px] sm:text-[54px] leading-none tracking-tight mt-3 tabular-nums"
           style={{ color: timerColor }}
         >
-          {onPause ? formatTime(pauseElapsedTime) : formatTime(elapsedTime)}
+          {onPause ? formatTime(pauseElapsedTime) : dayComplete ? formatTime(Math.round((attendanceStatus.attendance.working_hours || 0) * 3600)) : formatTime(elapsedTime)}
         </div>
         {attendanceStatus.clocked_in && !onPause && (
           <p data-testid="min-hours-status" className="text-xs font-semibold mt-3" style={{ color: reachedMinimum ? 'var(--status-success)' : 'var(--status-error)' }}>
@@ -357,7 +361,7 @@ export function TimeTrackerCard({ user, api }) {
           <p className="text-xs mt-3" style={{ color: 'var(--tone)' }}>Paused time is excluded from your 8h day</p>
         )}
         {!attendanceStatus.clocked_in && (
-          <p className="text-xs mt-3" style={{ color: 'var(--text-muted)' }}>Log in to start today's timer</p>
+          <p className="text-xs mt-3" style={{ color: 'var(--text-muted)' }}>{attendanceStatus.attendance?.clock_out ? "Logged out for today" : "Log in to start today's timer"}</p>
         )}
       </div>
 
@@ -389,7 +393,22 @@ export function TimeTrackerCard({ user, api }) {
 
       {/* Action Buttons */}
       <div className="space-y-3">
-        {!attendanceStatus.clocked_in ? (
+        {dayComplete ? (
+          // One Login and one Logout per day: today's attendance is done
+          <div
+            data-testid="day-complete-panel"
+            className="flex items-start gap-3 rounded-2xl px-4 py-3.5 tone-green"
+            style={{ background: 'var(--tone-bg)' }}
+          >
+            <CheckCircle className="h-5 w-5 flex-shrink-0 mt-0.5" style={{ color: 'var(--tone)' }} weight="fill" />
+            <div>
+              <p className="text-sm font-bold" style={{ color: 'var(--text-primary)' }}>Today's attendance is complete</p>
+              <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                You logged out at {new Date(attendanceStatus.attendance.clock_out).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. You can log in again tomorrow.
+              </p>
+            </div>
+          </div>
+        ) : !attendanceStatus.clocked_in ? (
           <div className="space-y-2.5">
             {gpsStatus && !gpsStatus.has_wfh_today && !gpsStatus.geofence_bypass && user?.gps_tracking_enabled !== false && (
               <div
