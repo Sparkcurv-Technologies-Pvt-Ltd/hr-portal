@@ -29,6 +29,7 @@ next-env.d.ts
 /build
 dist/
 dist
+.env
 
 # Environment files (comprehensive coverage)
 
