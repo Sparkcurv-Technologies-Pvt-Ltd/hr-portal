@@ -38,6 +38,7 @@ REQUEST_NOTIFY_EMAILS = [e.strip() for e in _request_emails_raw.split(",") if e.
 # Weekday attendance reminder emails (to the employee + their reporting manager)
 REMINDERS_ENABLED = os.environ.get("REMINDERS_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
 LOGIN_REMINDER_TIME = os.environ.get("LOGIN_REMINDER_TIME", "10:00")   # office time (APP_TIMEZONE), Mon–Fri
+LOGOUT_CHECK_TIME = os.environ.get("LOGOUT_CHECK_TIME", "18:30")      # still logged in after this → notify
 # Superadmins: admins with full access, including Reset Portal Data (comma-separated override in .env)
 SUPERADMIN_EMAILS = {e.strip().lower() for e in os.environ.get("SUPERADMIN_EMAILS", "ponish.jino@sparkcurv.com").split(",") if e.strip()}
 

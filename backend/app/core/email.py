@@ -308,20 +308,20 @@ def _login_reminder_email_html(employee_name: str, date_str: str, reminder_time:
     return _email_layout("Login reminder", body, eyebrow="Attendance", accent="amber")
 
 
-def _logout_reminder_email_html(employee_name: str, date_str: str, login_time: str, worked: str) -> str:
-    """Sent once the required hours are complete while the employee is still logged in."""
+def _logout_reminder_email_html(employee_name: str, date_str: str, login_time: str, check_time: str) -> str:
+    """Sent after the evening check time when the employee is still logged in."""
     box = _email_info_box(
         _email_field("Employee", html.escape(employee_name), size=18, weight=700)
         + _email_field("Date", html.escape(date_str))
         + _email_field("Logged in at", html.escape(login_time))
-        + _email_field("Worked today", html.escape(worked), color="#15803D", weight=700, last=True),
-        accent="green",
+        + _email_field("Status", f"Still logged in after {html.escape(check_time)}", color="#B45309", weight=700, last=True),
+        accent="amber",
     )
     body = (
         box
-        + _email_paragraph("The required hours for today are complete. Don't forget to <strong>log out</strong> in the "
-                           "HR Portal when you finish, so today's attendance is recorded correctly.")
+        + _email_paragraph("This employee hasn't logged out yet. If you've finished for the day, please <strong>log out</strong> "
+                           "in the HR Portal so today's attendance is recorded correctly.")
         + _email_button("Log out in the portal")
     )
-    return _email_layout("Your hours are complete", body, eyebrow="Attendance", accent="green")
+    return _email_layout("Logout reminder", body, eyebrow="Attendance", accent="amber")
 
