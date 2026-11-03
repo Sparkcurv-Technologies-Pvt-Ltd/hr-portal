@@ -5,6 +5,7 @@ import json
 from datetime import datetime, timezone
 
 from app.core.config import DEFAULT_SALARY_COMPONENTS, MONTH_NAMES, WORKING_DAYS_PER_MONTH
+from app.core import email_settings
 from app.core.email import _payslip_email_html, _send_email_with_pdf
 from app.core.log import logger
 from app.db import execute_query
@@ -25,12 +26,14 @@ async def send_payslip_email(payslip_id: int) -> str:
     recipient = ps.get("employee_email") or (emp["email"] if emp else None)
     if not recipient:
         raise ValueError("Employee email not found")
+    if email_settings.is_muted(recipient, "payslips"):
+        raise ValueError("Payslip emails are switched off for this employee")
     ps["earnings_breakdown"] = _compute_earnings(ps.get("basic_salary", 0) or 0, await _get_salary_components())
     pdf_buffer = generate_payslip_pdf(ps)
     subject = f"Payslip for {ps['month_name']} {ps['year']} — Sparkcurv HR"
     filename = f"Payslip_{ps['month_name']}_{ps['year']}.pdf"
     await asyncio.get_event_loop().run_in_executor(
-        None, lambda: _send_email_with_pdf(recipient, subject, _payslip_email_html(ps), pdf_buffer, filename)
+        None, lambda: _send_email_with_pdf(recipient, subject, _payslip_email_html(ps), pdf_buffer, filename, "payslips")
     )
     return recipient
 

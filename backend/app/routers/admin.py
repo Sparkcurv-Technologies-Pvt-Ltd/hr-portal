@@ -14,6 +14,7 @@ from typing import Optional
 from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFile
 
 from app.core.config import APP_TIMEZONE, DEFAULT_SHIFT_END, DEFAULT_SHIFT_START, MONTHLY_PERMISSION_HOURS, REQUEST_NOTIFY_EMAILS, WORKING_DAYS_PER_MONTH
+from app.core import email_settings
 from app.core.email import _cr_email_html, _request_email_html, _send_email
 from app.core.log import logger
 from app.core.permissions import GRANTABLE_ROLES, MODULES, can_grant, effective_module_permissions, forbid_granted_on_admin, superadmin_ids, has_permission, require_any_view, require_permission
@@ -37,7 +38,11 @@ async def get_all_employees(request: Request):
     viewer = await require_any_view(request, allow_manager=True)
     # Granted (non-admin) viewers only see salaries with Payroll view access
     hide_salary = viewer.get("_granted") and not has_permission(await effective_module_permissions(viewer), "payroll", "view")
-    rows = await execute_query("SELECT id, email, name, role, department, position, avatar_url, created_at, casual_leave, sick_leave, loss_of_pay, permission_hours, half_day_leave, shift, basic_salary, employee_code, wfh_limit, gps_tracking_enabled, timer_access_enabled, full_day_required, reporting_manager_id, is_cr_approver, date_of_birth FROM users ORDER BY created_at DESC", fetch_all=True)
+    rows = await execute_query("SELECT id, email, name, role, department, position, avatar_url, created_at, casual_leave, sick_leave, loss_of_pay, permission_hours, half_day_leave, shift, basic_salary, employee_code, wfh_limit, gps_tracking_enabled, timer_access_enabled, full_day_required, email_notifications, reporting_manager_id, is_cr_approver, date_of_birth FROM users ORDER BY created_at DESC", fetch_all=True)
+    mute_rows = await execute_query("SELECT user_id, category FROM user_email_mutes", fetch_all=True)
+    muted_by_user = {}
+    for m in (mute_rows or []):
+        muted_by_user.setdefault(m["user_id"], set()).add(m["category"])
     result = []
     for emp in (rows or []):
         e = dict(emp)
@@ -45,6 +50,8 @@ async def get_all_employees(request: Request):
         e["gps_tracking_enabled"] = bool(int(e["gps_tracking_enabled"]) if e.get("gps_tracking_enabled") is not None else 1)
         e["timer_access_enabled"] = bool(int(e["timer_access_enabled"]) if e.get("timer_access_enabled") is not None else 0)
         e["full_day_required"] = bool(int(e["full_day_required"])) if e.get("full_day_required") is not None else True
+        e["email_notifications"] = bool(int(e["email_notifications"])) if e.get("email_notifications") is not None else True
+        e["email_muted_modules"] = sorted(muted_by_user.get(emp["id"], ()))
         if hide_salary:
             e.pop("basic_salary", None)
         result.append(e)
@@ -140,6 +147,10 @@ async def delete_employee(employee_id: str, request: Request):
     # Access grants must not outlive the account (a reused id would otherwise inherit them)
     await execute_query("DELETE FROM vault_shares WHERE user_id = %s", (int(employee_id),))
     await execute_query("DELETE FROM user_permissions WHERE user_id = %s", (int(employee_id),))
+    await execute_query("DELETE FROM user_email_mutes WHERE user_id = %s", (int(employee_id),))
+    # Issues and tickets they were working on become unassigned (not left pointing at a missing person)
+    await execute_query("UPDATE tasks SET assignee_id = NULL WHERE assignee_id = %s", (int(employee_id),))
+    await execute_query("UPDATE tickets SET assignee_id = NULL WHERE assignee_id = %s", (int(employee_id),))
     return {"message": "Employee deleted"}
 
 @admin_router.put("/employees/{employee_id}/gps-tracking")
@@ -170,6 +181,52 @@ async def toggle_full_day_rule(employee_id: str, request: Request):
     if result == 0 and not await execute_query("SELECT id FROM users WHERE id = %s AND role != 'admin'", (int(employee_id),), fetch_one=True):
         raise HTTPException(status_code=404, detail="Employee not found")
     return {"message": f"8-hour rule {'on' if required else 'off'}", "full_day_required": required}
+
+async def _email_prefs(person: dict) -> dict:
+    rows = await execute_query("SELECT category FROM user_email_mutes WHERE user_id = %s", (person["id"],), fetch_all=True)
+    muted = {r["category"] for r in (rows or [])}
+    all_on = person.get("email_notifications") is None or bool(int(person["email_notifications"]))
+    return {
+        "email_notifications": all_on,
+        "modules": [{"key": k, "label": label, "description": desc, "enabled": k not in muted} for k, label, desc in email_settings.PERSON_CATEGORIES],
+    }
+
+@admin_router.get("/employees/{employee_id}/email-notifications")
+async def get_email_notifications(employee_id: str, request: Request):
+    await require_permission(request, "employees", "view")
+    person = await execute_query("SELECT id, email, email_notifications FROM users WHERE id = %s", (int(employee_id),), fetch_one=True)
+    if not person:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    return await _email_prefs(person)
+
+@admin_router.put("/employees/{employee_id}/email-notifications")
+async def update_email_notifications(employee_id: str, request: Request):
+    """Choose which emails one person receives. Body: ``{"email_notifications": bool}`` (everything on/off for them) and/or
+    ``{"modules": {category: bool}}`` (one kind of email on/off). Off = nothing of that kind is emailed to them
+    (own emails, reminders and copies on team alerts alike)."""
+    await require_permission(request, "employees", "edit")
+    body = await request.json()
+    person = await execute_query("SELECT id, email, email_notifications FROM users WHERE id = %s", (int(employee_id),), fetch_one=True)
+    if not person:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    modules = body.get("modules")
+    if modules is not None and (not isinstance(modules, dict) or any(k not in email_settings.PERSON_KEYS or not isinstance(v, bool) for k, v in modules.items())):
+        raise HTTPException(status_code=400, detail="Unknown email module")   # validate everything before writing anything
+    if "email_notifications" in body:
+        if not isinstance(body["email_notifications"], bool):
+            raise HTTPException(status_code=400, detail="'email_notifications' must be true or false")
+        await execute_query("UPDATE users SET email_notifications = %s WHERE id = %s", (int(body["email_notifications"]), person["id"]))
+        email_settings.set_muted(person["email"], not body["email_notifications"])
+        person["email_notifications"] = int(body["email_notifications"])
+    if modules is not None:
+        for key, enabled in modules.items():
+            if enabled:
+                await execute_query("DELETE FROM user_email_mutes WHERE user_id = %s AND category = %s", (person["id"], key))
+            else:
+                await execute_query("INSERT IGNORE INTO user_email_mutes (user_id, category) VALUES (%s, %s)", (person["id"], key))
+        rows = await execute_query("SELECT category FROM user_email_mutes WHERE user_id = %s", (person["id"],), fetch_all=True)
+        email_settings.set_muted_modules(person["email"], {r["category"] for r in (rows or [])})
+    return await _email_prefs(person)
 
 @admin_router.put("/employees/{employee_id}/timer-access")
 async def toggle_timer_access(employee_id: str, request: Request):
@@ -537,7 +594,7 @@ async def review_leave_request(leave_id: str, request: Request, action: str):
             ("Dates", f"{dates} ({leave_req['days']} day{'s' if leave_req['days'] != 1 else ''})"),
             ("Status", f"{new_status.title()} by {reviewer['name']}"),
         ], message="Log in to the HR Portal for details.")
-        asyncio.get_event_loop().run_in_executor(None, _send_email, _decision_recipients(leave_req.get("user_email")), f"Leave {new_status.title()}: {leave_req['user_name']} ({leave_label})", html_body)
+        asyncio.get_event_loop().run_in_executor(None, _send_email, _decision_recipients(leave_req.get("user_email")), f"Leave {new_status.title()}: {leave_req['user_name']} ({leave_label})", html_body, "requests")
     except Exception as e:
         logger.warning(f"Leave decision email dispatch failed: {e}")
 
@@ -651,7 +708,7 @@ async def review_permission(permission_id: str, request: Request, action: str):
             ("Duration", f"{perm['duration_minutes']} minutes"),
             ("Status", f"{new_status.title()} by {reviewer['name']}"),
         ], message="Log in to the HR Portal for details.")
-        asyncio.get_event_loop().run_in_executor(None, _send_email, _decision_recipients(perm.get("user_email")), f"Permission {new_status.title()}: {perm['user_name']} ({perm['duration_minutes']} min)", html_body)
+        asyncio.get_event_loop().run_in_executor(None, _send_email, _decision_recipients(perm.get("user_email")), f"Permission {new_status.title()}: {perm['user_name']} ({perm['duration_minutes']} min)", html_body, "requests")
     except Exception as e:
         logger.warning(f"Permission decision email dispatch failed: {e}")
 
@@ -899,7 +956,7 @@ async def review_wfh_request(wfh_id: str, request: Request, action: str):
             ("Date", wfh_req["date"]),
             ("Status", f"{new_status.title()} by {reviewer['name']}"),
         ], message="Log in to the HR Portal for details.")
-        asyncio.get_event_loop().run_in_executor(None, _send_email, _decision_recipients(wfh_req.get("user_email")), f"WFH {new_status.title()}: {wfh_req['user_name']} ({wfh_req['date']})", html_body)
+        asyncio.get_event_loop().run_in_executor(None, _send_email, _decision_recipients(wfh_req.get("user_email")), f"WFH {new_status.title()}: {wfh_req['user_name']} ({wfh_req['date']})", html_body, "requests")
     except Exception as e:
         logger.warning(f"WFH decision email dispatch failed: {e}")
 
@@ -1084,7 +1141,7 @@ async def manager_action_cr(cr_id: str, request: Request, action: str = "approve
             for adm in (admins or []):
                 html_body = _cr_email_html(cr_updated, "Admin")
                 subj = f"[{cr_updated.get('cr_number','CR')}] Manager Approved — Final Approval Needed: {cr_updated.get('title','')}"
-                asyncio.get_event_loop().run_in_executor(None, _send_email, [adm["email"]], subj, html_body)
+                asyncio.get_event_loop().run_in_executor(None, _send_email, [adm["email"]], subj, html_body, "change_requests")
         except Exception as ex:
             logger.warning(f"Admin email after manager-approve failed: {ex}")
 
@@ -1316,7 +1373,11 @@ async def reset_portal(body: ResetPortalRequest, request: Request):
         )
         # Access grants must not outlive the deleted accounts
         await execute_query("DELETE FROM user_permissions WHERE user_id NOT IN (SELECT id FROM users)")
+        await execute_query("DELETE FROM user_email_mutes WHERE user_id NOT IN (SELECT id FROM users)")
         await execute_query("DELETE FROM vault_shares WHERE user_id NOT IN (SELECT id FROM users)")
+        await execute_query("DELETE FROM reminder_log WHERE user_id NOT IN (SELECT id FROM users)")
+        await execute_query("UPDATE tasks SET assignee_id = NULL WHERE assignee_id IS NOT NULL AND assignee_id NOT IN (SELECT id FROM users)")
+        await execute_query("UPDATE tickets SET assignee_id = NULL WHERE assignee_id IS NOT NULL AND assignee_id NOT IN (SELECT id FROM users)")
     except Exception as e:
         logging.warning(f"Reset: could not clear users: {e}")
 

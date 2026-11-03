@@ -15,8 +15,10 @@ from app.db import execute_query
 
 MODULES = [
     "employees", "payroll", "finance", "leaves", "wfh", "permissions",
-    "change-requests", "attendance", "org-chart", "policy", "holidays",
+    "change-requests", "attendance", "org-chart", "policy", "holidays", "projects", "tickets", "monitoring", "ssh",
 ]
+# Modules with their own page outside the Management panel: a grant on them doesn't open employee data or the panel
+OWN_PAGE_MODULES = ("projects", "tickets", "monitoring", "ssh")
 ACTIONS = ("view", "edit", "delete")
 
 
@@ -111,7 +113,7 @@ async def require_any_view(request: Request, allow_manager: bool = False) -> dic
     if user.get("role") == "admin":
         return user
     perms = await effective_module_permissions(user)
-    if any(has_permission(perms, m, "view") for m in MODULES):
+    if any(has_permission(perms, m, "view") for m in MODULES if m not in OWN_PAGE_MODULES):
         return _granted_scope(user)
     if allow_manager and user.get("role") == "manager":
         return user

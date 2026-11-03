@@ -15,6 +15,11 @@ import { PolicyTab } from "@/components/employee/PolicyTab";
 import { HolidaysTab } from "@/components/employee/HolidaysTab";
 import { OrgTreeTab } from "@/components/employee/OrgTreeTab";
 import { VaultTab } from "@/components/common/VaultTab";
+import { canDo } from "@/lib/permissions";
+import { ProjectsTab } from "@/components/common/ProjectsTab";
+import { TicketsTab } from "@/components/common/TicketsTab";
+import { MonitoringTab } from "@/components/common/MonitoringTab";
+import { SshTab } from "@/components/common/SshTab";
 import { ManagerTeamTab } from "@/components/employee/ManagerTeamTab";
 import { ManagerRequestsTab } from "@/components/employee/ManagerRequestsTab";
 import { ManagerAttendanceTab } from "@/components/employee/ManagerAttendanceTab";
@@ -150,6 +155,11 @@ export default function EmployeeDashboard() {
         {activeTab === "holidays" && (
           <HolidaysTab api={api} holidays={holidays} />
         )}
+
+        {activeTab === "projects" && canDo(user, "projects", "view") && <ProjectsTab api={api} user={user} />}
+        {activeTab === "tickets" && canDo(user, "tickets", "view") && <TicketsTab api={api} user={user} />}
+        {activeTab === "monitoring" && canDo(user, "monitoring", "view") && <MonitoringTab api={api} user={user} />}
+        {activeTab === "ssh" && canDo(user, "ssh", "view") && <SshTab api={api} user={user} />}
 
         {activeTab === "vault" && user?.vault_access && (
           <VaultTab api={api} user={user} />

@@ -187,7 +187,7 @@ async def clock_out(request: Request):
             mgr = await execute_query("SELECT id, name, email FROM users WHERE id = %s", (user["reporting_manager_id"],), fetch_one=True)
             if mgr and mgr.get("email"):
                 html = _emergency_clockout_email_html(user["name"], emergency_reason, round(working_hours, 2), today)
-                asyncio.get_event_loop().run_in_executor(None, _send_email, [mgr["email"]], f"Emergency Logout: {user['name']}", html)
+                asyncio.get_event_loop().run_in_executor(None, _send_email, [mgr["email"]], f"Emergency Logout: {user['name']}", html, "attendance")
         except Exception as e:
             logger.warning(f"Emergency clock-out email dispatch failed: {e}")
 

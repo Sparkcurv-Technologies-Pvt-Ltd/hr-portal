@@ -12,7 +12,13 @@ export const PERMISSION_MODULES = [
   { key: "org-chart", label: "Worker Tree" },
   { key: "policy", label: "Company Policy" },
   { key: "holidays", label: "Holidays" },
+  { key: "projects", label: "Projects & Tasks" },
+  { key: "tickets", label: "Client Tickets" },
+  { key: "monitoring", label: "Server Monitoring" },
+  { key: "ssh", label: "SSH Terminal" },
 ];
+// Modules with their own page outside the Management panel (a grant on them doesn't open the panel)
+const OWN_PAGE_MODULES = ["projects", "tickets", "monitoring", "ssh"];
 
 export const PERMISSION_ACTIONS = ["view", "edit", "delete"];
 
@@ -45,5 +51,5 @@ export function canDo(user, module, action = "view") {
 
 // True when the user can open at least one management module (non-admins an admin granted access)
 export function hasAnyModuleAccess(user) {
-  return PERMISSION_MODULES.some(m => canDo(user, m.key, "view"));
+  return PERMISSION_MODULES.some(m => !OWN_PAGE_MODULES.includes(m.key) && canDo(user, m.key, "view"));
 }

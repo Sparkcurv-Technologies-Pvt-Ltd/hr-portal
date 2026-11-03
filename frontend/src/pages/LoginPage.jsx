@@ -51,6 +51,9 @@ export default function LoginPage() {
       <div className="absolute -top-40 -left-40 w-[520px] h-[520px] rounded-full" style={{ background: 'radial-gradient(circle, rgba(125,211,252,0.35), transparent 65%)' }} />
       <div className="absolute -bottom-48 right-[-120px] w-[620px] h-[620px] rounded-full" style={{ background: 'radial-gradient(circle, rgba(255,255,255,0.18), transparent 65%)' }} />
       <NetworkBackground />
+      <a href="/client" className="absolute top-5 right-5 sm:top-6 sm:right-8 z-20 text-sm font-semibold text-white/90 hover:text-white px-4 py-2 rounded-full" style={{ background: "rgba(255,255,255,0.14)", border: "1px solid rgba(255,255,255,0.25)" }} data-testid="client-portal-link">
+        Client portal <ArrowRight className="inline h-4 w-4 ml-1" weight="bold" />
+      </a>
 
       <div className="relative z-10 min-h-screen max-w-[1240px] mx-auto px-5 sm:px-8 py-10 flex flex-col lg:flex-row items-center justify-center gap-10 lg:gap-16">
         {/* Brand story (desktop) */}

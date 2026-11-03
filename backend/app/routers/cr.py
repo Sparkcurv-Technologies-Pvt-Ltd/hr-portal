@@ -78,11 +78,11 @@ async def create_cr(data: CRCreate, request: Request):
     try:
         mgr_html = _cr_email_html(cr_row, "Reporting Manager")
         subject = f"[{cr_number}] New Change Request: {data.title}"
-        asyncio.get_event_loop().run_in_executor(None, _send_email, [mgr["email"]], subject, mgr_html)
+        asyncio.get_event_loop().run_in_executor(None, _send_email, [mgr["email"]], subject, mgr_html, "change_requests")
         for extra_email in EXTRA_NOTIFICATION_EMAILS:
             if extra_email != mgr["email"]:
                 extra_html = _cr_email_html(cr_row, "Notification")
-                asyncio.get_event_loop().run_in_executor(None, _send_email, [extra_email], f"[{cr_number}] New CR Submitted: {data.title}", extra_html)
+                asyncio.get_event_loop().run_in_executor(None, _send_email, [extra_email], f"[{cr_number}] New CR Submitted: {data.title}", extra_html, "change_requests")
     except Exception as e:
         logger.warning(f"CR email dispatch failed: {e}")
 

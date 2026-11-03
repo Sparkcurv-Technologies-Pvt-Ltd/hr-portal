@@ -35,6 +35,12 @@ _request_emails_raw = os.environ.get(
     "ponish.jino@sparkcurv.com,Jebin.s@sparkcurv.com,ranjith.m@sparkcurv.com,senthil@sparkcurv.com,arun@sparkcurv.com",
 )
 REQUEST_NOTIFY_EMAILS = [e.strip() for e in _request_emails_raw.split(",") if e.strip()]
+# Client tickets: hours allowed before a ticket of each priority is overdue (SLA), and who hears about new client tickets
+TICKET_SLA_HOURS = {"urgent": 4, "high": 8, "medium": 24, "low": 72}
+TICKET_NOTIFY_EMAILS = REQUEST_NOTIFY_EMAILS
+# Client server monitoring: probes to private / loopback addresses are refused (so the portal can't be pointed at your own
+# network) unless this is switched on, e.g. for client servers reachable over a VPN
+MONITOR_ALLOW_PRIVATE = os.environ.get("MONITOR_ALLOW_PRIVATE", "false").strip().lower() in ("1", "true", "yes", "on")
 # Weekday attendance reminder emails (to the employee + their reporting manager)
 REMINDERS_ENABLED = os.environ.get("REMINDERS_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
 LOGIN_REMINDER_TIME = os.environ.get("LOGIN_REMINDER_TIME", "10:00")   # office time (APP_TIMEZONE), Mon–Fri

@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "sonner";
 import {
   CalendarCheck, Clock, UserPlus, Trash, PencilSimple, Timer, CurrencyDollar,
-  ClockClockwise, Key, Camera, ShieldCheck, WifiNone, WifiHigh, DotsThreeVertical, Users, UserCircleGear, Buildings, HourglassHigh
+  ClockClockwise, Key, Camera, ShieldCheck, WifiNone, WifiHigh, DotsThreeVertical, Users, UserCircleGear, Buildings, HourglassHigh, Bell, BellSlash
 } from "@phosphor-icons/react";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
@@ -16,6 +16,7 @@ import {
 import { compressImage } from "@/lib/image";
 import { Avatar } from "@/components/common/Avatar";
 import { useAuth } from "@/contexts/AuthContext";
+import { EmailPrefsDialog } from "@/components/admin/EmailPrefsDialog";
 import { usePermissions } from "@/hooks/usePermissions";
 
 export function EmployeesTab({
@@ -171,6 +172,10 @@ export function EmployeesTab({
     }
   };
 
+  // Email notifications: which kinds of email this person receives (dialog), reflected on the row's bell
+  const [emailPrefsEmp, setEmailPrefsEmp] = useState(null);
+  const handleEmailPrefsChanged = (id, patch) => setEmployees(prev => prev.map(e => e.id === id ? { ...e, ...patch } : e));
+
   const handleToggleCRApprover = async (emp) => {
     const newVal = !emp.is_cr_approver;
     try {
@@ -317,6 +322,7 @@ export function EmployeesTab({
 
   return (
     <>
+      <EmailPrefsDialog open={!!emailPrefsEmp} onOpenChange={(o) => !o && setEmailPrefsEmp(null)} api={api} emp={emailPrefsEmp} onChanged={handleEmailPrefsChanged} />
       <div className="mb-6 flex items-end justify-between">
         <div>
           <h1 className="font-bold text-slate-900 font-['Outfit'] tracking-tight">Employees</h1>
@@ -638,6 +644,22 @@ export function EmployeesTab({
                         >
                           <HourglassHigh className="h-4 w-4" weight={emp.full_day_required !== false ? "bold" : "regular"} />
                         </button>
+
+                        {/* Email notifications: opens the per-module dialog */}
+                        {(() => {
+                          const allOff = emp.email_notifications === false;
+                          const partial = !allOff && (emp.email_muted_modules || []).length > 0;
+                          return (
+                            <button
+                              data-testid={`email-toggle-${emp.id}`}
+                              onClick={() => setEmailPrefsEmp(emp)}
+                              title={allOff ? "Email notifications OFF — click to choose" : partial ? `Some emails off (${emp.email_muted_modules.length}) — click to choose` : "Email notifications ON — click to choose"}
+                              className={`h-8 w-8 flex items-center justify-center rounded-lg border transition-all cursor-pointer ${allOff ? 'bg-transparent text-slate-400 border-slate-200 hover:bg-slate-100' : partial ? 'tone-amber bg-[var(--tone-bg)] text-[color:var(--tone)] border-[color:var(--tone)] hover:brightness-95' : 'tone-green bg-[var(--tone-bg)] text-[color:var(--tone)] border-[color:var(--tone)] hover:brightness-95'}`}
+                            >
+                              {allOff ? <BellSlash className="h-4 w-4" /> : <Bell className="h-4 w-4" weight="bold" />}
+                            </button>
+                          );
+                        })()}
                         </>
                         )}
                       </>

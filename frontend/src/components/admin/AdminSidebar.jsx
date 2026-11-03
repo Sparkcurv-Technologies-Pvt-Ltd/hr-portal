@@ -4,7 +4,7 @@ import { canDo, PERMISSION_MODULES } from "@/lib/permissions";
 import { Button } from "@/components/ui/button";
 import {
   SignOut, Users, CalendarCheck, Clock, House, Timer, CurrencyDollar, ClockClockwise, CalendarStar, Scroll, Laptop,
-  GitPullRequest, Bell, TreeStructure, ShieldCheck, Wallet, ArrowLeft, LockKey, X as XIcon
+  GitPullRequest, Bell, TreeStructure, ShieldCheck, Wallet, ArrowLeft, LockKey, Kanban, Headset, Pulse, TerminalWindow, X as XIcon
 } from "@phosphor-icons/react";
 import { Avatar } from "@/components/common/Avatar";
 import { MobileTopBar } from "@/components/common/MobileTopBar";
@@ -14,6 +14,10 @@ import { SidebarCollapseToggle } from "@/components/common/SidebarCollapseToggle
 
 const allNavItems = [
   { id: "overview", label: "Overview", icon: House, section: "Workspace" },
+  { id: "projects", label: "Projects & Tasks", icon: Kanban, section: "Workspace" },
+  { id: "tickets", label: "Client Tickets", icon: Headset, section: "Workspace" },
+  { id: "monitoring", label: "Server Monitoring", icon: Pulse, section: "Workspace" },
+  { id: "ssh", label: "SSH Terminal", icon: TerminalWindow, section: "Workspace" },
   { id: "my-attendance", label: "My Attendance", icon: ClockClockwise, managerOnly: true, section: "Workspace" },
   { id: "employees", label: "Employees", icon: Users, adminOnly: true, section: "People & Pay" },
   { id: "payroll", label: "Payroll", icon: CurrencyDollar, adminOnly: true, section: "People & Pay" },

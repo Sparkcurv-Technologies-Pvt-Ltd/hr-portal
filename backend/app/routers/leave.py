@@ -87,7 +87,7 @@ async def create_leave_request(leave_data: LeaveRequest, request: Request):
             ("Dates", f"{dates} ({working_days} day{'s' if working_days != 1 else ''})"),
             ("Reason", leave_data.reason or "-"),
         ])
-        asyncio.get_event_loop().run_in_executor(None, _send_email, REQUEST_NOTIFY_EMAILS, f"Leave Request: {user['name']} ({leave_label})", html_body)
+        asyncio.get_event_loop().run_in_executor(None, _send_email, REQUEST_NOTIFY_EMAILS, f"Leave Request: {user['name']} ({leave_label})", html_body, "requests")
     except Exception as e:
         logger.warning(f"Leave request email dispatch failed: {e}")
 

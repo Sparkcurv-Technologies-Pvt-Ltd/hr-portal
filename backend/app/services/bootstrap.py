@@ -10,6 +10,8 @@ from app.core.security import hash_password
 from app.db import execute_query, get_pool
 from app.services.media import _save_image_db
 from app.services.payroll import _payslip_scheduler_loop
+from app.core import email_settings
+from app.services.monitoring import start_monitor_scheduler
 from app.services.reminders import start_reminder_scheduler
 
 
@@ -192,6 +194,275 @@ async def init_database():
                     processed_by VARCHAR(255),
                     processed_at VARCHAR(64),
                     UNIQUE KEY uk_month_year (month, year)
+                )
+            """)
+            await cur.execute("""
+                CREATE TABLE IF NOT EXISTS projects (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    name VARCHAR(200) NOT NULL,
+                    project_key VARCHAR(10) NOT NULL,
+                    description TEXT,
+                    status VARCHAR(20) DEFAULT 'active',
+                    owner_id INT,
+                    created_at VARCHAR(64),
+                    updated_at VARCHAR(64),
+                    UNIQUE KEY uk_project_key (project_key)
+                )
+            """)
+            await cur.execute("""
+                CREATE TABLE IF NOT EXISTS sprints (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    project_id INT NOT NULL,
+                    name VARCHAR(150) NOT NULL,
+                    goal TEXT,
+                    status VARCHAR(20) DEFAULT 'planned',
+                    start_date VARCHAR(10),
+                    end_date VARCHAR(10),
+                    created_at VARCHAR(64),
+                    completed_at VARCHAR(64),
+                    KEY idx_sprint_project (project_id)
+                )
+            """)
+            await cur.execute("""
+                CREATE TABLE IF NOT EXISTS tasks (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    project_id INT NOT NULL,
+                    issue_number INT NOT NULL,
+                    issue_type VARCHAR(20) DEFAULT 'task',
+                    title VARCHAR(255) NOT NULL,
+                    description TEXT,
+                    status VARCHAR(20) DEFAULT 'todo',
+                    priority VARCHAR(20) DEFAULT 'medium',
+                    labels VARCHAR(255) DEFAULT '',
+                    story_points INT,
+                    sprint_id INT,
+                    assignee_id INT,
+                    created_by INT,
+                    due_date VARCHAR(10),
+                    created_at VARCHAR(64),
+                    updated_at VARCHAR(64),
+                    completed_at VARCHAR(64),
+                    UNIQUE KEY uk_issue (project_id, issue_number),
+                    KEY idx_task_assignee (assignee_id),
+                    KEY idx_task_sprint (sprint_id)
+                )
+            """)
+            await cur.execute("""
+                CREATE TABLE IF NOT EXISTS task_activity (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    task_id INT NOT NULL,
+                    user_id INT,
+                    user_name VARCHAR(255),
+                    field VARCHAR(40) NOT NULL,
+                    old_value VARCHAR(255),
+                    new_value VARCHAR(255),
+                    created_at VARCHAR(64),
+                    KEY idx_activity_task (task_id)
+                )
+            """)
+            await cur.execute("""
+                CREATE TABLE IF NOT EXISTS task_comments (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    task_id INT NOT NULL,
+                    user_id INT,
+                    body TEXT NOT NULL,
+                    created_at VARCHAR(64),
+                    KEY idx_comment_task (task_id)
+                )
+            """)
+            await cur.execute("""
+                CREATE TABLE IF NOT EXISTS clients (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    name VARCHAR(200) NOT NULL,
+                    email VARCHAR(255) DEFAULT '',
+                    phone VARCHAR(50) DEFAULT '',
+                    address TEXT,
+                    notes TEXT,
+                    status VARCHAR(20) DEFAULT 'active',
+                    created_at VARCHAR(64),
+                    UNIQUE KEY uk_client_name (name)
+                )
+            """)
+            await cur.execute("""
+                CREATE TABLE IF NOT EXISTS client_contacts (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    client_id INT NOT NULL,
+                    name VARCHAR(200) NOT NULL,
+                    email VARCHAR(255) NOT NULL,
+                    phone VARCHAR(50) DEFAULT '',
+                    password_hash VARCHAR(255) NOT NULL,
+                    active TINYINT NOT NULL DEFAULT 1,
+                    last_login VARCHAR(64),
+                    created_at VARCHAR(64),
+                    UNIQUE KEY uk_contact_email (email),
+                    KEY idx_contact_client (client_id)
+                )
+            """)
+            await cur.execute("""
+                CREATE TABLE IF NOT EXISTS tickets (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    client_id INT NOT NULL,
+                    contact_id INT,
+                    subject VARCHAR(255) NOT NULL,
+                    description TEXT,
+                    category VARCHAR(30) DEFAULT 'support',
+                    priority VARCHAR(20) DEFAULT 'medium',
+                    status VARCHAR(20) DEFAULT 'open',
+                    assignee_id INT,
+                    created_by INT,
+                    due_at VARCHAR(64),
+                    created_at VARCHAR(64),
+                    updated_at VARCHAR(64),
+                    first_response_at VARCHAR(64),
+                    resolved_at VARCHAR(64),
+                    KEY idx_ticket_client (client_id),
+                    KEY idx_ticket_assignee (assignee_id),
+                    KEY idx_ticket_status (status)
+                )
+            """)
+            await cur.execute("""
+                CREATE TABLE IF NOT EXISTS ticket_replies (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    ticket_id INT NOT NULL,
+                    author_type VARCHAR(10) NOT NULL,
+                    author_id INT,
+                    author_name VARCHAR(255),
+                    body TEXT NOT NULL,
+                    internal TINYINT NOT NULL DEFAULT 0,
+                    created_at VARCHAR(64),
+                    KEY idx_reply_ticket (ticket_id)
+                )
+            """)
+            await cur.execute("""
+                CREATE TABLE IF NOT EXISTS ticket_activity (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    ticket_id INT NOT NULL,
+                    user_name VARCHAR(255),
+                    field VARCHAR(40) NOT NULL,
+                    old_value VARCHAR(255),
+                    new_value VARCHAR(255),
+                    created_at VARCHAR(64),
+                    KEY idx_tactivity_ticket (ticket_id)
+                )
+            """)
+            await cur.execute("""
+                CREATE TABLE IF NOT EXISTS user_email_mutes (
+                    user_id INT NOT NULL,
+                    category VARCHAR(50) NOT NULL,
+                    PRIMARY KEY (user_id, category)
+                )
+            """)
+
+            await cur.execute("""
+                CREATE TABLE IF NOT EXISTS monitors (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    client_id INT NOT NULL,
+                    name VARCHAR(200) NOT NULL,
+                    type VARCHAR(10) NOT NULL,
+                    target VARCHAR(500) NOT NULL DEFAULT '',
+                    port INT,
+                    expected_text VARCHAR(255) DEFAULT '',
+                    interval_seconds INT NOT NULL DEFAULT 300,
+                    timeout_seconds INT NOT NULL DEFAULT 10,
+                    fail_threshold INT NOT NULL DEFAULT 2,
+                    enabled TINYINT NOT NULL DEFAULT 1,
+                    auto_ticket TINYINT NOT NULL DEFAULT 1,
+                    visible_to_client TINYINT NOT NULL DEFAULT 1,
+                    status VARCHAR(12) NOT NULL DEFAULT 'unknown',
+                    consecutive_failures INT NOT NULL DEFAULT 0,
+                    last_checked_at VARCHAR(64),
+                    last_change_at VARCHAR(64),
+                    last_response_ms INT,
+                    last_error VARCHAR(500),
+                    open_ticket_id INT,
+                    agent_token_hash VARCHAR(64),
+                    last_agent_at VARCHAR(64),
+                    cpu_percent FLOAT,
+                    mem_percent FLOAT,
+                    disk_percent FLOAT,
+                    cpu_max INT NOT NULL DEFAULT 90,
+                    mem_max INT NOT NULL DEFAULT 90,
+                    disk_max INT NOT NULL DEFAULT 90,
+                    created_at VARCHAR(64),
+                    KEY idx_monitor_client (client_id),
+                    KEY idx_monitor_token (agent_token_hash)
+                )
+            """)
+            await cur.execute("""
+                CREATE TABLE IF NOT EXISTS monitor_checks (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    monitor_id INT NOT NULL,
+                    checked_at VARCHAR(64) NOT NULL,
+                    ok TINYINT NOT NULL,
+                    response_ms INT,
+                    error VARCHAR(500),
+                    cpu_percent FLOAT,
+                    mem_percent FLOAT,
+                    disk_percent FLOAT,
+                    KEY idx_check_monitor (monitor_id, checked_at)
+                )
+            """)
+            await cur.execute("""
+                CREATE TABLE IF NOT EXISTS monitor_events (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    monitor_id INT NOT NULL,
+                    status VARCHAR(12) NOT NULL,
+                    detail VARCHAR(500),
+                    created_at VARCHAR(64) NOT NULL,
+                    KEY idx_event_monitor (monitor_id, created_at)
+                )
+            """)
+            await cur.execute("""
+                CREATE TABLE IF NOT EXISTS ssh_servers (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    client_id INT NOT NULL,
+                    name VARCHAR(200) NOT NULL,
+                    host VARCHAR(255) NOT NULL,
+                    port INT NOT NULL DEFAULT 22,
+                    host_key TEXT,
+                    host_key_fingerprint VARCHAR(120),
+                    pinned_at VARCHAR(64),
+                    created_at VARCHAR(64),
+                    KEY idx_ssh_server_client (client_id)
+                )
+            """)
+            await cur.execute("""
+                CREATE TABLE IF NOT EXISTS ssh_logins (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    server_id INT NOT NULL,
+                    level VARCHAR(2) NOT NULL,
+                    username VARCHAR(100) NOT NULL,
+                    auth_type VARCHAR(10) NOT NULL,
+                    secret_enc TEXT NOT NULL,
+                    passphrase_enc TEXT,
+                    updated_at VARCHAR(64),
+                    updated_by VARCHAR(255),
+                    UNIQUE KEY uk_ssh_login (server_id, level)
+                )
+            """)
+            await cur.execute("""
+                CREATE TABLE IF NOT EXISTS ssh_team (
+                    user_id INT PRIMARY KEY,
+                    level VARCHAR(2) NOT NULL
+                )
+            """)
+            await cur.execute("""
+                CREATE TABLE IF NOT EXISTS ssh_sessions (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    server_id INT NOT NULL,
+                    server_name VARCHAR(200),
+                    client_name VARCHAR(200),
+                    user_id INT NOT NULL,
+                    user_name VARCHAR(255),
+                    level VARCHAR(2) NOT NULL,
+                    login_username VARCHAR(100),
+                    ticket_id INT,
+                    ip VARCHAR(64),
+                    started_at VARCHAR(64) NOT NULL,
+                    ended_at VARCHAR(64),
+                    end_reason VARCHAR(120),
+                    KEY idx_ssh_session_server (server_id),
+                    KEY idx_ssh_session_user (user_id)
                 )
             """)
             await cur.execute("""
@@ -461,6 +732,16 @@ async def startup():
                 logger.info("Added timer_access_enabled column to users")
             except Exception as e:
                 logger.warning(f"Could not add timer_access_enabled column: {e}")
+
+        # Migration: per-employee switch for receiving email notifications (1 = on, the default)
+        try:
+            await execute_query("SELECT email_notifications FROM users LIMIT 1", fetch_one=True)
+        except Exception:
+            try:
+                await execute_query("ALTER TABLE users ADD COLUMN email_notifications TINYINT(1) DEFAULT 1")
+                logger.info("Added email_notifications column to users")
+            except Exception as e:
+                logger.warning(f"Could not add email_notifications column: {e}")
 
         # Migration: per-employee switch for the 8-hour Logout rule (1 = Logout blocked until 8h, the default)
         try:
@@ -766,8 +1047,11 @@ async def startup():
                 )
             logger.info("Default company policies seeded")
 
+        await email_settings.load()
+        email_settings.start_refresh()
         asyncio.create_task(_payslip_scheduler_loop())
         start_reminder_scheduler()
+        start_monitor_scheduler()
         logger.info("Payslip auto-generation scheduler started (runs daily, generates previous month's payslips on/after the 1st)")
 
     except Exception as e:

@@ -54,7 +54,7 @@ async def _recipients(user: dict) -> list:
 
 
 def _send(recipients: list, subject: str, html_body: str) -> None:
-    asyncio.get_event_loop().run_in_executor(None, _send_email, recipients, subject, html_body)
+    asyncio.get_event_loop().run_in_executor(None, _send_email, recipients, subject, html_body, "attendance")
 
 
 async def send_login_reminders(now_local: datetime) -> int:

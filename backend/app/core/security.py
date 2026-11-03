@@ -43,22 +43,17 @@ def create_refresh_token(user_id: int) -> str:
     return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
 # Auth dependency
-async def get_current_user(request: Request) -> dict:
-    token = request.cookies.get("access_token")
-    if not token:
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header.startswith("Bearer "):
-            token = auth_header[7:]
+USER_COLUMNS = "id, email, name, role, department, position, avatar_url, casual_leave, sick_leave, loss_of_pay, permission_hours, half_day_leave, shift, basic_salary, employee_code, gps_tracking_enabled, timer_access_enabled, full_day_required, vault_editor, reporting_manager_id"
+
+async def user_from_access_token(token: str) -> dict:
+    """Resolve a staff access token (cookie or bearer) to the user row; raises 401 for anything invalid."""
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
     try:
         payload = jwt.decode(token, get_jwt_secret(), algorithms=[JWT_ALGORITHM])
         if payload.get("type") != "access":
             raise HTTPException(status_code=401, detail="Invalid token type")
-        user = await execute_query(
-            "SELECT id, email, name, role, department, position, avatar_url, casual_leave, sick_leave, loss_of_pay, permission_hours, half_day_leave, shift, basic_salary, employee_code, gps_tracking_enabled, timer_access_enabled, full_day_required, vault_editor, reporting_manager_id FROM users WHERE id = %s",
-            (int(payload["sub"]),), fetch_one=True
-        )
+        user = await execute_query(f"SELECT {USER_COLUMNS} FROM users WHERE id = %s", (int(payload["sub"]),), fetch_one=True)
         if not user:
             raise HTTPException(status_code=401, detail="User not found")
         user["_id"] = str(user["id"])
@@ -67,6 +62,14 @@ async def get_current_user(request: Request) -> dict:
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
+
+async def get_current_user(request: Request) -> dict:
+    token = request.cookies.get("access_token")
+    if not token:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+    return await user_from_access_token(token)
 
 async def require_admin(request: Request) -> dict:
     user = await get_current_user(request)

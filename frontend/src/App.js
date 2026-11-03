@@ -4,6 +4,7 @@ import { Toaster } from "./components/ui/sonner";
 import LoginPage from "./pages/LoginPage";
 import EmployeeDashboard from "./pages/EmployeeDashboard";
 import AdminDashboard from "./pages/AdminDashboard";
+import ClientPortal from "./pages/ClientPortal";
 import { hasAnyModuleAccess } from "./lib/permissions";
 import "./App.css";
 
@@ -72,6 +73,7 @@ function App() {
                 <AdminDashboard />
               </ProtectedRoute>
             } />
+            <Route path="/client/*" element={<ClientPortal />} />
             <Route path="/" element={<Navigate to="/login" replace />} />
             <Route path="*" element={<Navigate to="/login" replace />} />
           </Routes>

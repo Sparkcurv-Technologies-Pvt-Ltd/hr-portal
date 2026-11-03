@@ -7,11 +7,15 @@ import smtplib
 import ssl
 from email.message import EmailMessage
 
+from app.core import email_settings
 from app.core.config import FRONTEND_URL, GMAIL_APP_PASSWORD, GMAIL_USER
 
 
-def _send_email(to_addresses: list[str], subject: str, html_body: str) -> None:
-    """Send HTML email via Gmail SMTP. Silently skips if credentials not set."""
+def _send_email(to_addresses: list[str], subject: str, html_body: str, category: str = None) -> None:
+    """Send HTML email via Gmail SMTP. Silently skips if credentials not set; addresses an admin switched this kind of email off for are dropped."""
+    to_addresses = [a for a in to_addresses if not email_settings.is_muted(a, category)]   # employees an admin switched notifications off for
+    if not to_addresses:
+        return
     if not GMAIL_USER or not GMAIL_APP_PASSWORD:
         logging.getLogger("hr_portal").warning("Gmail credentials not set — skipping email send.")
         return
@@ -30,8 +34,11 @@ def _send_email(to_addresses: list[str], subject: str, html_body: str) -> None:
         except Exception as e:
             logging.getLogger("hr_portal").warning(f"Email send failed to {to}: {e}")
 
-def _send_email_with_pdf(to_address: str, subject: str, html_body: str, pdf_buffer: io.BytesIO, filename: str) -> None:
+def _send_email_with_pdf(to_address: str, subject: str, html_body: str, pdf_buffer: io.BytesIO, filename: str, category: str = None) -> None:
     """Send HTML email with PDF attachment via Gmail SMTP."""
+    if email_settings.is_muted(to_address, category):
+        logging.getLogger("hr_portal").info(f"Email '{subject}' not sent: notifications are switched off for {to_address}")
+        return
     if not GMAIL_USER or not GMAIL_APP_PASSWORD:
         logging.getLogger("hr_portal").warning("Gmail credentials not set — skipping payslip email.")
         return
@@ -149,10 +156,10 @@ def _email_info_box(inner_html: str, accent: str = "blue") -> str:
 </table>"""
 
 
-def _email_button(label: str = "Login to Portal") -> str:
+def _email_button(label: str = "Login to Portal", url: str = None) -> str:
     return f"""<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0"><tr>
   <td bgcolor="#0020F8" style="background:#0020F8;border-radius:10px">
-    <a href="{_login_url()}" style="display:inline-block;padding:14px 30px;font-family:{_FONT};font-size:15px;font-weight:700;color:#FFFFFF;text-decoration:none;border-radius:10px">{label} &rarr;</a>
+    <a href="{url or _login_url()}" style="display:inline-block;padding:14px 30px;font-family:{_FONT};font-size:15px;font-weight:700;color:#FFFFFF;text-decoration:none;border-radius:10px">{label} &rarr;</a>
   </td>
 </tr></table>"""
 
@@ -325,3 +332,15 @@ def _logout_reminder_email_html(employee_name: str, date_str: str, login_time: s
     )
     return _email_layout("Logout reminder", body, eyebrow="Attendance", accent="amber")
 
+
+
+def _ticket_email_html(heading: str, ticket_no: str, subject: str, fields: list[tuple[str, str]], message: str, *,
+                       accent: str = "blue", url: str = None, button: str = "View ticket", eyebrow: str = "Support ticket") -> str:
+    """Client-ticket notification (staff and client side). All values are HTML-escaped."""
+    rows = "".join(
+        _email_field(html.escape(label), html.escape(str(value)), last=i == len(fields) - 1)
+        for i, (label, value) in enumerate(fields)
+    )
+    box = _email_info_box(_email_field(html.escape(ticket_no), html.escape(subject), size=18, weight=700, last=not fields) + rows, accent=accent)
+    body = box + _email_paragraph(html.escape(message)) + _email_button(button, url)
+    return _email_layout(html.escape(heading), body, eyebrow=html.escape(eyebrow), accent=accent)

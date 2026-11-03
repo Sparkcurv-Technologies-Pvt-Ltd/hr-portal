@@ -71,7 +71,7 @@ async def request_permission(perm_data: PermissionRequest, request: Request):
             ("Duration", f"{perm_data.duration_minutes} minutes"),
             ("Reason", perm_data.reason or "-"),
         ])
-        asyncio.get_event_loop().run_in_executor(None, _send_email, REQUEST_NOTIFY_EMAILS, f"Permission Request: {user['name']} ({perm_data.duration_minutes} min)", html_body)
+        asyncio.get_event_loop().run_in_executor(None, _send_email, REQUEST_NOTIFY_EMAILS, f"Permission Request: {user['name']} ({perm_data.duration_minutes} min)", html_body, "requests")
     except Exception as e:
         logger.warning(f"Permission request email dispatch failed: {e}")
 

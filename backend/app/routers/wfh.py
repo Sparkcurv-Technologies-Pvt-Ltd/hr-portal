@@ -59,7 +59,7 @@ async def create_wfh_request(wfh_data: WFHRequest, request: Request):
             ("Date", wfh_data.date),
             ("Reason", wfh_data.reason or "-"),
         ])
-        asyncio.get_event_loop().run_in_executor(None, _send_email, REQUEST_NOTIFY_EMAILS, f"WFH Request: {user['name']} ({wfh_data.date})", html_body)
+        asyncio.get_event_loop().run_in_executor(None, _send_email, REQUEST_NOTIFY_EMAILS, f"WFH Request: {user['name']} ({wfh_data.date})", html_body, "requests")
     except Exception as e:
         logger.warning(f"WFH request email dispatch failed: {e}")
 

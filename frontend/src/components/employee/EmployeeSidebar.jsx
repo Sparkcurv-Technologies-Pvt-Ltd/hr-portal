@@ -1,9 +1,9 @@
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { hasAnyModuleAccess } from "@/lib/permissions";
+import { canDo, hasAnyModuleAccess } from "@/lib/permissions";
 import {
   SignOut, Clock, House, CalendarCheck, ChartBar, Receipt, CalendarStar, Scroll, Laptop, CurrencyDollar,
-  GitPullRequest, TreeStructure, UsersThree, ShieldCheck, ArrowRight, LockKey, X as XIcon
+  GitPullRequest, TreeStructure, UsersThree, ShieldCheck, ArrowRight, LockKey, Kanban, Headset, Pulse, TerminalWindow, X as XIcon
 } from "@phosphor-icons/react";
 import { Avatar } from "@/components/common/Avatar";
 import { MobileTopBar } from "@/components/common/MobileTopBar";
@@ -11,12 +11,16 @@ import { SidebarBrand } from "@/components/common/SidebarBrand";
 import { SidebarCollapseToggle } from "@/components/common/SidebarCollapseToggle";
 
 // Nav items grouped into sidebar sections. `perm` = role-permission key (absent = always visible),
-// `userFlag` = user field that must be true (e.g. vault_access), `testId` keeps the existing data-testid attributes.
+// `userFlag` = user field that must be true (e.g. vault_access), `module` = permission-matrix module the user needs View on, `testId` keeps the existing data-testid attributes.
 export const EMPLOYEE_NAV_SECTIONS = [
   {
     label: "Workspace",
     items: [
       { id: "dashboard", label: "Dashboard", icon: House },
+      { id: "projects", label: "Projects & Tasks", icon: Kanban, module: "projects", testId: "projects-tab" },
+      { id: "tickets", label: "Client Tickets", icon: Headset, module: "tickets", testId: "tickets-tab" },
+      { id: "monitoring", label: "Server Monitoring", icon: Pulse, module: "monitoring", testId: "monitoring-tab" },
+      { id: "ssh", label: "SSH Terminal", icon: TerminalWindow, module: "ssh", testId: "ssh-tab" },
       { id: "summary", label: "Work Summary", icon: ChartBar, perm: "summary" },
       { id: "wfh", label: "Work From Home", icon: Laptop, perm: "wfh", testId: "wfh-tab" },
       { id: "change-requests", label: "Change Requests", icon: GitPullRequest, perm: "change-requests", testId: "cr-tab" },
@@ -73,7 +77,7 @@ export function EmployeeSidebar({
 
   const sections = EMPLOYEE_NAV_SECTIONS
     .filter(section => !section.managerOnly || isManagerRole)
-    .map(section => ({ ...section, items: section.items.filter(item => (!item.perm || canView(item.perm)) && (!item.userFlag || user?.[item.userFlag])) }))
+    .map(section => ({ ...section, items: section.items.filter(item => (!item.perm || canView(item.perm)) && (!item.userFlag || user?.[item.userFlag]) && (!item.module || canDo(user, item.module, "view"))) }))
     .filter(section => section.items.length > 0);
 
   return (

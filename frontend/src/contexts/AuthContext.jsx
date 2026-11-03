@@ -44,19 +44,6 @@ export function AuthProvider({ children }) {
     }
   };
 
-  const register = async (userData) => {
-    try {
-      const { data } = await api.post("/auth/register", userData);
-      setUser(data);
-      return { success: true, user: data };
-    } catch (error) {
-      return { 
-        success: false, 
-        error: formatApiErrorDetail(error.response?.data?.detail) || error.message 
-      };
-    }
-  };
-
   const logout = async () => {
     try {
       await api.post("/auth/logout");
@@ -68,7 +55,7 @@ export function AuthProvider({ children }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, register, logout, api }}>
+    <AuthContext.Provider value={{ user, loading, login, logout, api }}>
       {children}
     </AuthContext.Provider>
   );
