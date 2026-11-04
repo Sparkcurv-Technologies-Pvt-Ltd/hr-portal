@@ -4,7 +4,7 @@ import { canDo, PERMISSION_MODULES } from "@/lib/permissions";
 import { Button } from "@/components/ui/button";
 import {
   SignOut, Users, CalendarCheck, Clock, House, Timer, CurrencyDollar, ClockClockwise, CalendarStar, Scroll, Laptop,
-  GitPullRequest, Bell, TreeStructure, ShieldCheck, Wallet, ArrowLeft, LockKey, Kanban, Headset, Pulse, TerminalWindow, X as XIcon
+  GitPullRequest, Bell, TreeStructure, ShieldCheck, Wallet, ArrowLeft, LockKey, Kanban, Handshake, X as XIcon
 } from "@phosphor-icons/react";
 import { Avatar } from "@/components/common/Avatar";
 import { MobileTopBar } from "@/components/common/MobileTopBar";
@@ -15,9 +15,7 @@ import { SidebarCollapseToggle } from "@/components/common/SidebarCollapseToggle
 const allNavItems = [
   { id: "overview", label: "Overview", icon: House, section: "Workspace" },
   { id: "projects", label: "Projects & Tasks", icon: Kanban, section: "Workspace" },
-  { id: "tickets", label: "Client Tickets", icon: Headset, section: "Workspace" },
-  { id: "monitoring", label: "Server Monitoring", icon: Pulse, section: "Workspace" },
-  { id: "ssh", label: "SSH Terminal", icon: TerminalWindow, section: "Workspace" },
+  { id: "client-mgmt", label: "Client Management", icon: Handshake, section: "Workspace", clientMgmt: true },
   { id: "my-attendance", label: "My Attendance", icon: ClockClockwise, managerOnly: true, section: "Workspace" },
   { id: "employees", label: "Employees", icon: Users, adminOnly: true, section: "People & Pay" },
   { id: "payroll", label: "Payroll", icon: CurrencyDollar, adminOnly: true, section: "People & Pay" },
@@ -38,7 +36,7 @@ export const ADMIN_NAV_LABELS = Object.fromEntries(allNavItems.map(item => [item
 
 // Admin / manager sidebar: logo, notification bell, role-filtered nav, collapse-toggle button, user info
 export function AdminSidebar({
-  user, logout, api, isAdmin, isManager, rolePerms, notifications, fetchData,
+  user, logout, api, isAdmin, isManager, notifications, fetchData,
   activeTab, setActiveTab, sidebarCollapsed, toggleSidebarCollapsed, mobileSidebarOpen, setMobileSidebarOpen
 }) {
   const [notifDropdownOpen, setNotifDropdownOpen] = useState(false);
@@ -48,6 +46,7 @@ export function AdminSidebar({
 
   // Admins see everything; others see Overview, Holidays and the modules they were granted View on
   const navItems = allNavItems.filter(item => {
+    if (item.clientMgmt) return isAdmin || !!user?.client_mgmt?.access;
     if (item.managerOnly) return isManager;
     if (isAdmin) return true;
     if (item.id === "holidays") return true; // viewing holidays is open to everyone

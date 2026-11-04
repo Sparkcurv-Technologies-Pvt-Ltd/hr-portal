@@ -31,7 +31,6 @@ export function useAdminDashboardData(api, user, locationDate) {
   const [orgLevels, setOrgLevels] = useState([]);
 
   // Role permissions
-  const [rolePerms, setRolePerms] = useState({ manager: {}, employee: {} });
 
   // Salary components (configurable)
   const [salaryComponents, setSalaryComponents] = useState([]);
@@ -88,9 +87,6 @@ export function useAdminDashboardData(api, user, locationDate) {
         api.get("/admin/org-chart").then(r => setOrgNodes(r.data)).catch(() => {});
         api.get("/org-levels").then(r => setOrgLevels(r.data || [])).catch(() => {});
       }
-      if (user?.role === "admin") {
-        api.get("/admin/role-permissions").then(r => setRolePerms({ manager: {}, employee: {}, ...(r.data || {}) })).catch(() => {});
-      }
       if (can("payroll")) {
         api.get("/admin/salary-components").then(r => setSalaryComponents(r.data || [])).catch(() => {});
       }
@@ -117,7 +113,7 @@ export function useAdminDashboardData(api, user, locationDate) {
     analytics, employees, setEmployees, managers, leaveRequests, permissionRequests, attendance,
     payslips, holidays, policies, wfhRequests, payrollSummary, changeRequests,
     locationData, setLocationData, officeSettings, setOfficeSettings, officeForm, setOfficeForm,
-    orgNodes, setOrgNodes, orgLevels, setOrgLevels, rolePerms, setRolePerms,
+    orgNodes, setOrgNodes, orgLevels, setOrgLevels,
     salaryComponents, setSalaryComponents, componentsForm, setComponentsForm,
     fetchData,
   };

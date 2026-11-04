@@ -27,9 +27,7 @@ import { AccessDialog } from "@/components/admin/AccessDialog";
 import { VaultTab } from "@/components/common/VaultTab";
 import { canDo } from "@/lib/permissions";
 import { ProjectsTab } from "@/components/common/ProjectsTab";
-import { TicketsTab } from "@/components/common/TicketsTab";
-import { MonitoringTab } from "@/components/common/MonitoringTab";
-import { SshTab } from "@/components/common/SshTab";
+import { ClientMgmtTab } from "@/components/common/ClientMgmtTab";
 import { usePermissions } from "@/hooks/usePermissions";
 
 export default function AdminDashboard() {
@@ -49,7 +47,7 @@ export default function AdminDashboard() {
     analytics, employees, setEmployees, managers, leaveRequests, permissionRequests, attendance,
     payslips, holidays, policies, wfhRequests, payrollSummary, changeRequests,
     locationData, setLocationData, officeSettings, setOfficeSettings, officeForm, setOfficeForm,
-    orgNodes, setOrgNodes, orgLevels, setOrgLevels, rolePerms, setRolePerms,
+    orgNodes, setOrgNodes, orgLevels, setOrgLevels,
     salaryComponents, setSalaryComponents, componentsForm, setComponentsForm,
     fetchData,
   } = useAdminDashboardData(api, user, locationDate);
@@ -81,7 +79,6 @@ export default function AdminDashboard() {
   });
   const [attendanceView, setAttendanceView] = useState("table");
   const [detectingLocation, setDetectingLocation] = useState(false);
-  const [rolePermsLoading, setRolePermsLoading] = useState(false);
 
   // Leave balance dialog (opened from the Employees table, rendered at page level)
   const {
@@ -100,7 +97,6 @@ export default function AdminDashboard() {
         api={api}
         isAdmin={isAdmin}
         isManager={isManager}
-        rolePerms={rolePerms}
         notifications={notifications}
         fetchData={fetchData}
         activeTab={activeTab}
@@ -277,22 +273,14 @@ export default function AdminDashboard() {
 
         {/* ── Role Access Tab ─────────────────────────────────────────────── */}
         {activeTab === "projects" && canDo(user, "projects", "view") && <ProjectsTab api={api} user={user} />}
-        {activeTab === "tickets" && canDo(user, "tickets", "view") && <TicketsTab api={api} user={user} />}
-        {activeTab === "monitoring" && canDo(user, "monitoring", "view") && <MonitoringTab api={api} user={user} />}
-        {activeTab === "ssh" && canDo(user, "ssh", "view") && <SshTab api={api} user={user} />}
+        {activeTab === "client-mgmt" && user?.client_mgmt?.access && <ClientMgmtTab api={api} user={user} />}
 
         {activeTab === "vault" && isAdmin && (
           <VaultTab api={api} user={user} />
         )}
 
         {activeTab === "role-access" && isAdmin && (
-          <RoleAccessTab
-            api={api}
-            rolePerms={rolePerms}
-            setRolePerms={setRolePerms}
-            rolePermsLoading={rolePermsLoading}
-            setRolePermsLoading={setRolePermsLoading}
-          />
+          <RoleAccessTab api={api} />
         )}
         </div>
       </main>

@@ -17,9 +17,7 @@ import { OrgTreeTab } from "@/components/employee/OrgTreeTab";
 import { VaultTab } from "@/components/common/VaultTab";
 import { canDo } from "@/lib/permissions";
 import { ProjectsTab } from "@/components/common/ProjectsTab";
-import { TicketsTab } from "@/components/common/TicketsTab";
-import { MonitoringTab } from "@/components/common/MonitoringTab";
-import { SshTab } from "@/components/common/SshTab";
+import { ClientMgmtTab } from "@/components/common/ClientMgmtTab";
 import { ManagerTeamTab } from "@/components/employee/ManagerTeamTab";
 import { ManagerRequestsTab } from "@/components/employee/ManagerRequestsTab";
 import { ManagerAttendanceTab } from "@/components/employee/ManagerAttendanceTab";
@@ -33,7 +31,7 @@ export default function EmployeeDashboard() {
 
   // Server data (polled every 60s)
   const {
-    rolePermissions, orgNodes, orgLevels, leaveBalance, leaveRequests, attendanceHistory,
+    orgNodes, orgLevels, leaveBalance, leaveRequests, attendanceHistory,
     permissionBalance, permissionRequests, workingSummary, payslips, holidays, policies,
     wfhBalance, wfhRequests, monthlyLeaveUsage, salaryStructure, myCRs, crTypes, myManager,
     fetchData,
@@ -65,7 +63,6 @@ export default function EmployeeDashboard() {
       <EmployeeSidebar
         user={user}
         logout={logout}
-        rolePermissions={rolePermissions}
         isManagerRole={isManagerRole}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
@@ -157,9 +154,7 @@ export default function EmployeeDashboard() {
         )}
 
         {activeTab === "projects" && canDo(user, "projects", "view") && <ProjectsTab api={api} user={user} />}
-        {activeTab === "tickets" && canDo(user, "tickets", "view") && <TicketsTab api={api} user={user} />}
-        {activeTab === "monitoring" && canDo(user, "monitoring", "view") && <MonitoringTab api={api} user={user} />}
-        {activeTab === "ssh" && canDo(user, "ssh", "view") && <SshTab api={api} user={user} />}
+        {activeTab === "client-mgmt" && user?.client_mgmt?.access && <ClientMgmtTab api={api} user={user} />}
 
         {activeTab === "vault" && user?.vault_access && (
           <VaultTab api={api} user={user} />

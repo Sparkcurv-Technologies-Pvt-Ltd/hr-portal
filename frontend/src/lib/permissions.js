@@ -13,12 +13,11 @@ export const PERMISSION_MODULES = [
   { key: "policy", label: "Company Policy" },
   { key: "holidays", label: "Holidays" },
   { key: "projects", label: "Projects & Tasks" },
-  { key: "tickets", label: "Client Tickets" },
-  { key: "monitoring", label: "Server Monitoring" },
-  { key: "ssh", label: "SSH Terminal" },
+  { key: "sales", label: "Sales & Clients" },
+  { key: "accounts", label: "Client Accounts" },
 ];
 // Modules with their own page outside the Management panel (a grant on them doesn't open the panel)
-const OWN_PAGE_MODULES = ["projects", "tickets", "monitoring", "ssh"];
+const OWN_PAGE_MODULES = ["projects", "sales", "accounts"];
 
 export const PERMISSION_ACTIONS = ["view", "edit", "delete"];
 
@@ -34,7 +33,7 @@ export function toggleAction(perm, action) {
 }
 
 // Roles that can hold management modules (nothing by default). The backend only reports grants
-// that count: employees' only when a superadmin made them.
+// that count: only those a superadmin made.
 export const GRANTABLE_ROLES = ["manager", "employee"];
 
 // Admins can do everything; others need the flag an admin saved in user.module_permissions.

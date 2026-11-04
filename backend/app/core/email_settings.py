@@ -17,16 +17,14 @@ CATEGORIES = [
     ("attendance", "Attendance emails", "10:00 AM login reminders, 6:30 PM logout reminders and emergency logout alerts."),
     ("payslips", "Payslips", "Payslip PDF emailed to the employee when it is generated or re-sent."),
     ("projects", "Project task assignments", "Email to a person when an issue is assigned to them."),
-    ("tickets_team", "Client tickets: team alerts", "New client ticket, client reply and assignment emails to your team."),
-    ("monitoring", "Server monitoring alerts", "Down and recovered alerts for client servers."),
-    ("tickets_clients", "Client tickets: emails to clients", "Confirmation, staff reply and resolved / closed emails to the client."),
+    ("sales", "Sales & proposals", "Proposal replies from clients and lead follow-up emails."),
 ]
 REFRESH_SECONDS = 10
 
 _muted: set = set()   # lower-cased addresses of employees whose email notifications an admin switched off entirely
 _muted_modules: dict = {}   # lower-cased address -> set of categories switched off for that employee only
-# Kinds of email an employee can receive (client emails go to clients, not employees)
-PERSON_CATEGORIES = [c for c in CATEGORIES if c[0] != "tickets_clients"]
+# Kinds of email an employee can receive
+PERSON_CATEGORIES = list(CATEGORIES)
 PERSON_KEYS = {c[0] for c in PERSON_CATEGORIES}
 
 

@@ -3,42 +3,39 @@ import { Button } from "@/components/ui/button";
 import { canDo, hasAnyModuleAccess } from "@/lib/permissions";
 import {
   SignOut, Clock, House, CalendarCheck, ChartBar, Receipt, CalendarStar, Scroll, Laptop, CurrencyDollar,
-  GitPullRequest, TreeStructure, UsersThree, ShieldCheck, ArrowRight, LockKey, Kanban, Headset, Pulse, TerminalWindow, X as XIcon
+  GitPullRequest, TreeStructure, UsersThree, ShieldCheck, ArrowRight, LockKey, Kanban, Handshake, X as XIcon
 } from "@phosphor-icons/react";
 import { Avatar } from "@/components/common/Avatar";
 import { MobileTopBar } from "@/components/common/MobileTopBar";
 import { SidebarBrand } from "@/components/common/SidebarBrand";
 import { SidebarCollapseToggle } from "@/components/common/SidebarCollapseToggle";
 
-// Nav items grouped into sidebar sections. `perm` = role-permission key (absent = always visible),
-// `userFlag` = user field that must be true (e.g. vault_access), `module` = permission-matrix module the user needs View on, `testId` keeps the existing data-testid attributes.
+// Nav items grouped into sidebar sections. `userFlag` = user field that must be true (e.g. vault_access), `module` = permission-matrix module the user needs View on, `testId` keeps the existing data-testid attributes.
 export const EMPLOYEE_NAV_SECTIONS = [
   {
     label: "Workspace",
     items: [
       { id: "dashboard", label: "Dashboard", icon: House },
       { id: "projects", label: "Projects & Tasks", icon: Kanban, module: "projects", testId: "projects-tab" },
-      { id: "tickets", label: "Client Tickets", icon: Headset, module: "tickets", testId: "tickets-tab" },
-      { id: "monitoring", label: "Server Monitoring", icon: Pulse, module: "monitoring", testId: "monitoring-tab" },
-      { id: "ssh", label: "SSH Terminal", icon: TerminalWindow, module: "ssh", testId: "ssh-tab" },
-      { id: "summary", label: "Work Summary", icon: ChartBar, perm: "summary" },
-      { id: "wfh", label: "Work From Home", icon: Laptop, perm: "wfh", testId: "wfh-tab" },
-      { id: "change-requests", label: "Change Requests", icon: GitPullRequest, perm: "change-requests", testId: "cr-tab" },
+      { id: "client-mgmt", label: "Client Management", icon: Handshake, access: u => !!u?.client_mgmt?.access, testId: "client-mgmt-tab-nav" },
+      { id: "summary", label: "Work Summary", icon: ChartBar },
+      { id: "wfh", label: "Work From Home", icon: Laptop, testId: "wfh-tab" },
+      { id: "change-requests", label: "Change Requests", icon: GitPullRequest, testId: "cr-tab" },
       { id: "vault", label: "Vault", icon: LockKey, userFlag: "vault_access", testId: "vault-tab" },
     ],
   },
   {
     label: "Pay",
     items: [
-      { id: "payslips", label: "Payslips", icon: Receipt, perm: "payslips" },
-      { id: "salary", label: "My Salary", icon: CurrencyDollar, perm: "salary", testId: "salary-tab" },
+      { id: "payslips", label: "Payslips", icon: Receipt },
+      { id: "salary", label: "My Salary", icon: CurrencyDollar, testId: "salary-tab" },
     ],
   },
   {
     label: "Company",
     items: [
-      { id: "holidays", label: "Holidays", icon: CalendarStar, perm: "holidays", testId: "holidays-tab" },
-      { id: "policy", label: "Company Policy", icon: Scroll, perm: "policy", testId: "policy-tab" },
+      { id: "holidays", label: "Holidays", icon: CalendarStar, testId: "holidays-tab" },
+      { id: "policy", label: "Company Policy", icon: Scroll, testId: "policy-tab" },
       { id: "org-tree", label: "Worker Tree", icon: TreeStructure, testId: "org-tree-tab" },
     ],
   },
@@ -60,16 +57,9 @@ export const EMPLOYEE_NAV_LABELS = Object.fromEntries(
 
 // Employee sidebar: logo, permission-filtered nav (+ manager tools), collapse-toggle button, user info
 export function EmployeeSidebar({
-  user, logout, rolePermissions, isManagerRole,
+  user, logout, isManagerRole,
   activeTab, setActiveTab, sidebarCollapsed, toggleSidebarCollapsed, mobileSidebarOpen, setMobileSidebarOpen
 }) {
-  // Role-based tab visibility: if no permissions set, show all; if set and key=false, hide
-  const canView = (key) => {
-    if (Object.keys(rolePermissions).length === 0) return true;
-    if (rolePermissions[key] === undefined) return true;
-    return rolePermissions[key] === true;
-  };
-
   const navigate = useNavigate();
   // Only for people explicitly granted module access (employees: only by the superadmin);
   // admins use the Admin Panel directly
@@ -77,7 +67,7 @@ export function EmployeeSidebar({
 
   const sections = EMPLOYEE_NAV_SECTIONS
     .filter(section => !section.managerOnly || isManagerRole)
-    .map(section => ({ ...section, items: section.items.filter(item => (!item.perm || canView(item.perm)) && (!item.userFlag || user?.[item.userFlag]) && (!item.module || canDo(user, item.module, "view"))) }))
+    .map(section => ({ ...section, items: section.items.filter(item => (!item.userFlag || user?.[item.userFlag]) && (!item.module || canDo(user, item.module, "view")) && (!item.access || item.access(user))) }))
     .filter(section => section.items.length > 0);
 
   return (

@@ -148,9 +148,8 @@ async def delete_employee(employee_id: str, request: Request):
     await execute_query("DELETE FROM vault_shares WHERE user_id = %s", (int(employee_id),))
     await execute_query("DELETE FROM user_permissions WHERE user_id = %s", (int(employee_id),))
     await execute_query("DELETE FROM user_email_mutes WHERE user_id = %s", (int(employee_id),))
-    # Issues and tickets they were working on become unassigned (not left pointing at a missing person)
+    # Issues they were working on become unassigned (not left pointing at a missing person)
     await execute_query("UPDATE tasks SET assignee_id = NULL WHERE assignee_id = %s", (int(employee_id),))
-    await execute_query("UPDATE tickets SET assignee_id = NULL WHERE assignee_id = %s", (int(employee_id),))
     return {"message": "Employee deleted"}
 
 @admin_router.put("/employees/{employee_id}/gps-tracking")
@@ -476,8 +475,8 @@ async def get_access_matrix(request: Request):
     roles = {u["id"]: u["role"] for u in (users or [])}
     grants = {}
     for r in (rows or []):
-        # employees' grants only count when a superadmin made them (matches effective_module_permissions)
-        if roles.get(r["user_id"]) == "employee" and r["granted_by"] not in sa_ids:
+        # grants only count when a superadmin made them (matches effective_module_permissions)
+        if r["user_id"] in roles and r["granted_by"] not in sa_ids:
             continue
         grants.setdefault(r["user_id"], {})[r["module"]] = {"view": bool(r["can_view"]), "edit": bool(r["can_edit"]), "delete": bool(r["can_delete"])}
     return {
@@ -502,33 +501,6 @@ async def save_access_matrix(request: Request):
         await _replace_employee_permissions(int(employee_id), grants, now, caller["id"])
         updated += 1
     return {"message": f"Access updated for {updated} employee{'s' if updated != 1 else ''}", "updated": updated}
-
-@admin_router.get("/role-permissions")
-async def get_role_permissions(request: Request):
-    await require_admin(request)
-    rows = await execute_query("SELECT role, feature_key, enabled FROM role_permissions ORDER BY role, feature_key", fetch_all=True)
-    result = {}
-    for r in (rows or []):
-        role = r["role"]
-        if role not in result:
-            result[role] = {}
-        result[role][r["feature_key"]] = bool(r["enabled"])
-    return result
-
-@admin_router.put("/role-permissions")
-async def update_role_permissions(request: Request):
-    await require_admin(request)
-    body = await request.json()  # { role: { feature_key: bool, ... }, ... }
-    for role, features in body.items():
-        if role not in ("manager", "employee"):
-            continue
-        for feature_key, enabled in features.items():
-            await execute_query(
-                "INSERT INTO role_permissions (role, feature_key, enabled) VALUES (%s,%s,%s) ON DUPLICATE KEY UPDATE enabled=%s",
-                (role, feature_key, int(bool(enabled)), int(bool(enabled)))
-            )
-    return {"message": "Permissions updated"}
-
 
 @admin_router.get("/leave-requests")
 async def get_all_leave_requests(request: Request, status: Optional[str] = None):
@@ -1377,7 +1349,6 @@ async def reset_portal(body: ResetPortalRequest, request: Request):
         await execute_query("DELETE FROM vault_shares WHERE user_id NOT IN (SELECT id FROM users)")
         await execute_query("DELETE FROM reminder_log WHERE user_id NOT IN (SELECT id FROM users)")
         await execute_query("UPDATE tasks SET assignee_id = NULL WHERE assignee_id IS NOT NULL AND assignee_id NOT IN (SELECT id FROM users)")
-        await execute_query("UPDATE tickets SET assignee_id = NULL WHERE assignee_id IS NOT NULL AND assignee_id NOT IN (SELECT id FROM users)")
     except Exception as e:
         logging.warning(f"Reset: could not clear users: {e}")
 

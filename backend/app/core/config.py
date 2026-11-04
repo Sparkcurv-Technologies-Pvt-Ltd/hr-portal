@@ -35,12 +35,22 @@ _request_emails_raw = os.environ.get(
     "ponish.jino@sparkcurv.com,Jebin.s@sparkcurv.com,ranjith.m@sparkcurv.com,senthil@sparkcurv.com,arun@sparkcurv.com",
 )
 REQUEST_NOTIFY_EMAILS = [e.strip() for e in _request_emails_raw.split(",") if e.strip()]
-# Client tickets: hours allowed before a ticket of each priority is overdue (SLA), and who hears about new client tickets
-TICKET_SLA_HOURS = {"urgent": 4, "high": 8, "medium": 24, "low": 72}
-TICKET_NOTIFY_EMAILS = REQUEST_NOTIFY_EMAILS
-# Client server monitoring: probes to private / loopback addresses are refused (so the portal can't be pointed at your own
-# network) unless this is switched on, e.g. for client servers reachable over a VPN
-MONITOR_ALLOW_PRIVATE = os.environ.get("MONITOR_ALLOW_PRIVATE", "false").strip().lower() in ("1", "true", "yes", "on")
+# Client Management: default GST % on invoices, the daily month-end invoice drafting job, and the public base URL used in proposal emails
+CLIENT_MGMT_DEFAULT_TAX_PCT = float(os.environ.get("CLIENT_MGMT_DEFAULT_TAX_PCT", "18"))
+CLIENT_MGMT_MONTH_END_ENABLED = os.environ.get("CLIENT_MGMT_MONTH_END_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
+PUBLIC_API_URL = os.environ.get("PUBLIC_API_URL", "").rstrip("/")   # e.g. https://hr.example.com ; empty = derived from the request
+CLIENT_MGMT_FILE_MAX_BYTES = 10 * 1024 * 1024
+# Letterhead on client documents (proposal, scope, agreement, invoice); override per deployment with environment variables
+COMPANY_LEGAL_NAME = os.environ.get("COMPANY_LEGAL_NAME", "Sparkcurv Technologies Pvt Limited")
+COMPANY_WEBSITE = os.environ.get("COMPANY_WEBSITE", "www.sparkcurv.com")
+COMPANY_ADDRESS = os.environ.get("COMPANY_ADDRESS", "64/3 Thompson Street, Palace Road, Nagercoil, Tamil Nadu 629001")
+COMPANY_TAGLINE = os.environ.get("COMPANY_TAGLINE", "DevOps • Cloud • Web & App Development • Cybersecurity")
+COMPANY_SALES_EMAIL = os.environ.get("COMPANY_SALES_EMAIL", "sales@sparkcurv.com")
+COMPANY_PHONE = os.environ.get("COMPANY_PHONE", "+91 96774 95028")
+COMPANY_GSTIN = os.environ.get("COMPANY_GSTIN", "")                # printed on invoices when set
+COMPANY_BANK_DETAILS = os.environ.get("COMPANY_BANK_DETAILS", "")   # e.g. "Bank: …\nA/c no: …\nIFSC: …" printed on invoices when set
+CLIENT_MGMT_REMINDERS_ENABLED = os.environ.get("CLIENT_MGMT_REMINDERS_ENABLED", "false").strip().lower() not in ("0", "false", "no", "off")
+CM_REMINDER_TIME = os.environ.get("CM_REMINDER_TIME", "09:00")   # office time (APP_TIMEZONE)
 # Weekday attendance reminder emails (to the employee + their reporting manager)
 REMINDERS_ENABLED = os.environ.get("REMINDERS_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off")
 LOGIN_REMINDER_TIME = os.environ.get("LOGIN_REMINDER_TIME", "10:00")   # office time (APP_TIMEZONE), Mon–Fri

@@ -22,23 +22,6 @@ async def get_org_levels(request: Request):
     return rows or []
 
 
-# All roles can read their own permissions
-@app_router.get("/api/my-permissions")
-async def get_my_permissions(request: Request):
-    user = await get_current_user(request)
-    role = user.get("role", "employee")
-    if role == "admin":
-        return {"role": "admin", "permissions": {}}  # admin has all access
-    rows = await execute_query(
-        "SELECT feature_key, enabled FROM role_permissions WHERE role=%s",
-        (role,), fetch_all=True
-    )
-    perms = {}
-    for r in (rows or []):
-        perms[r["feature_key"]] = bool(r["enabled"])
-    return {"role": role, "permissions": perms}
-
-
 @app_router.get("/api/birthdays/list")
 async def get_birthdays_list(request: Request):
     await get_current_user(request)

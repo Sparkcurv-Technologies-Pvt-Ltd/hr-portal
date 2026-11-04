@@ -7,6 +7,7 @@ from app.core.permissions import effective_module_permissions
 from app.core.security import create_access_token, create_refresh_token, get_current_user, is_superadmin, verify_password
 from app.db import execute_query
 from app.schemas.auth import UserLogin
+from app.services import cm_core
 
 
 auth_router = APIRouter(prefix="/auth")
@@ -18,6 +19,12 @@ async def _has_vault_access(user: dict) -> bool:
         return True
     row = await execute_query("SELECT 1 AS ok FROM vault_shares WHERE user_id = %s LIMIT 1", (user["id"],), fetch_one=True)
     return bool(row)
+
+
+async def _client_mgmt_flags(user: dict) -> dict:
+    """What the front end needs to show Client Management: the Sales level (mgr / sales / viewer) and the Accounts level (acct / viewer)."""
+    ctx = await cm_core.build_ctx(user)
+    return {"access": ctx.any_access, "sales": ctx.sales, "accounts": ctx.acct}
 
 
 @auth_router.post("/login")
@@ -34,7 +41,7 @@ async def login(user_data: UserLogin, response: Response):
     response.set_cookie(key="access_token", value=access_token, httponly=True, secure=COOKIE_SECURE, samesite=COOKIE_SAMESITE, max_age=3600, path="/")
     response.set_cookie(key="refresh_token", value=refresh_token, httponly=True, secure=COOKIE_SECURE, samesite=COOKIE_SAMESITE, max_age=604800, path="/")
 
-    return {"id": str(user["id"]), "email": email, "name": user["name"], "role": user["role"], "department": user.get("department", "General"), "position": user.get("position", "Employee"), "avatar_url": user.get("avatar_url"), "employee_code": user.get("employee_code", ""), "gps_tracking_enabled": bool(int(user["gps_tracking_enabled"]) if user.get("gps_tracking_enabled") is not None else 1), "timer_access_enabled": bool(int(user["timer_access_enabled"]) if user.get("timer_access_enabled") is not None else 0), "module_permissions": await effective_module_permissions(user), "vault_access": await _has_vault_access(user), "vault_editor": bool(user.get("vault_editor")), "is_superadmin": is_superadmin(user)}
+    return {"id": str(user["id"]), "email": email, "name": user["name"], "role": user["role"], "department": user.get("department", "General"), "position": user.get("position", "Employee"), "avatar_url": user.get("avatar_url"), "employee_code": user.get("employee_code", ""), "gps_tracking_enabled": bool(int(user["gps_tracking_enabled"]) if user.get("gps_tracking_enabled") is not None else 1), "timer_access_enabled": bool(int(user["timer_access_enabled"]) if user.get("timer_access_enabled") is not None else 0), "module_permissions": await effective_module_permissions(user), "vault_access": await _has_vault_access(user), "vault_editor": bool(user.get("vault_editor")), "is_superadmin": is_superadmin(user), "client_mgmt": await _client_mgmt_flags(user)}
 
 @auth_router.post("/logout")
 async def logout(response: Response):
@@ -51,6 +58,7 @@ async def get_me(request: Request):
     user["timer_access_enabled"] = bool(int(user["timer_access_enabled"]) if user.get("timer_access_enabled") is not None else 0)
     user["module_permissions"] = await effective_module_permissions(user)
     user["vault_access"] = await _has_vault_access(user)
+    user["client_mgmt"] = await _client_mgmt_flags(user)
     user["vault_editor"] = bool(user.get("vault_editor"))
     user["is_superadmin"] = is_superadmin(user)
     return user

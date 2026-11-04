@@ -1,8 +1,7 @@
 """Per-employee module permissions (View / Edit / Delete), granted by admins.
 
-Admins always have full access. Managers get only what an admin has explicitly saved for
-them in ``user_permissions`` (nothing by default). Employees get management access only
-from grants made by a superadmin (SUPERADMIN_EMAILS); anything else stored for them is ignored. Module keys match the admin panel tabs and
+Admins always have full access. Managers (team leads) and employees get management access only
+from grants made by a superadmin (SUPERADMIN_EMAILS), nothing by default; anything else stored for them is ignored. Module keys match the admin panel tabs and
 ``frontend/src/lib/permissions.js``.
 """
 
@@ -15,10 +14,10 @@ from app.db import execute_query
 
 MODULES = [
     "employees", "payroll", "finance", "leaves", "wfh", "permissions",
-    "change-requests", "attendance", "org-chart", "policy", "holidays", "projects", "tickets", "monitoring", "ssh",
+    "change-requests", "attendance", "org-chart", "policy", "holidays", "projects", "sales", "accounts",
 ]
 # Modules with their own page outside the Management panel: a grant on them doesn't open employee data or the panel
-OWN_PAGE_MODULES = ("projects", "tickets", "monitoring", "ssh")
+OWN_PAGE_MODULES = ("projects", "sales", "accounts")
 ACTIONS = ("view", "edit", "delete")
 
 
@@ -49,20 +48,13 @@ GRANTABLE_ROLES = ("manager", "employee")
 
 
 def can_grant(granter: dict, target_role: str) -> bool:
-    """Any admin can grant managers; only a superadmin can grant employees."""
-    if target_role == "manager":
-        return granter.get("role") == "admin"
-    if target_role == "employee":
-        return is_superadmin(granter)
-    return False
+    """Only a superadmin can give managers or employees management access."""
+    return target_role in GRANTABLE_ROLES and is_superadmin(granter)
 
 
 async def effective_module_permissions(user: dict) -> dict:
-    """Grants that apply to this user: managers' as saved; employees' only if a superadmin granted them."""
-    role = user.get("role")
-    if role == "manager":
-        return await get_module_permissions(user["id"])
-    if role == "employee":
+    """Grants that apply to this user (managers and employees): only those a superadmin made."""
+    if user.get("role") in GRANTABLE_ROLES:
         return await get_module_permissions(user["id"], granted_by_in=await superadmin_ids())
     return {}
 

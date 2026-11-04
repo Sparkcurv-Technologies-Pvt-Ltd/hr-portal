@@ -3,7 +3,6 @@ import { useState, useEffect, useCallback } from "react";
 // Loads everything the employee dashboard displays and refreshes it every 60 seconds.
 // `fetchData` is returned so tabs can refetch after a mutation.
 export function useEmployeeDashboardData(api) {
-  const [rolePermissions, setRolePermissions] = useState({});
   const [orgNodes, setOrgNodes] = useState([]);
   const [orgLevels, setOrgLevels] = useState([]);
   const [leaveBalance, setLeaveBalance] = useState({ casual: 0, sick: 0, loss_of_pay: 0 });
@@ -25,7 +24,7 @@ export function useEmployeeDashboardData(api) {
 
   const fetchData = useCallback(async () => {
     try {
-      const [balanceRes, requestsRes, historyRes, permBalRes, permReqRes, summaryRes, payslipsRes, holidaysRes, policiesRes, wfhBalRes, wfhReqRes, monthlyUsageRes, salaryRes, crRes, crTypesRes, rolePermRes] = await Promise.all([
+      const [balanceRes, requestsRes, historyRes, permBalRes, permReqRes, summaryRes, payslipsRes, holidaysRes, policiesRes, wfhBalRes, wfhReqRes, monthlyUsageRes, salaryRes, crRes, crTypesRes] = await Promise.all([
         api.get("/leave/balance"),
         api.get("/leave/my-requests"),
         api.get("/attendance/history"),
@@ -40,8 +39,7 @@ export function useEmployeeDashboardData(api) {
         api.get("/leave/monthly-usage"),
         api.get("/payslip/my-salary-structure"),
         api.get("/cr/my-requests"),
-        api.get("/cr/types"),
-        api.get("/my-permissions").catch(() => ({ data: { permissions: {} } }))
+        api.get("/cr/types")
       ]);
       setLeaveBalance(balanceRes.data);
       setLeaveRequests(requestsRes.data);
@@ -58,7 +56,6 @@ export function useEmployeeDashboardData(api) {
       setSalaryStructure(salaryRes.data);
       setMyCRs(crRes.data);
       setCrTypes(crTypesRes.data);
-      setRolePermissions(rolePermRes.data?.permissions || {});
       // Fetch org chart & levels (non-critical)
       api.get("/admin/org-chart").then(r => setOrgNodes(r.data || [])).catch(() => {});
       api.get("/org-levels").then(r => setOrgLevels(r.data || [])).catch(() => {});
@@ -81,7 +78,7 @@ export function useEmployeeDashboardData(api) {
   }, [fetchData]);
 
   return {
-    rolePermissions, orgNodes, orgLevels, leaveBalance, leaveRequests, attendanceHistory,
+    orgNodes, orgLevels, leaveBalance, leaveRequests, attendanceHistory,
     permissionBalance, permissionRequests, workingSummary, payslips, holidays, policies,
     wfhBalance, wfhRequests, monthlyLeaveUsage, salaryStructure, myCRs, crTypes, myManager,
     fetchData,

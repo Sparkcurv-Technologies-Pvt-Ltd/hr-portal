@@ -334,13 +334,81 @@ def _logout_reminder_email_html(employee_name: str, date_str: str, login_time: s
 
 
 
-def _ticket_email_html(heading: str, ticket_no: str, subject: str, fields: list[tuple[str, str]], message: str, *,
-                       accent: str = "blue", url: str = None, button: str = "View ticket", eyebrow: str = "Support ticket") -> str:
-    """Client-ticket notification (staff and client side). All values are HTML-escaped."""
-    rows = "".join(
-        _email_field(html.escape(label), html.escape(str(value)), last=i == len(fields) - 1)
-        for i, (label, value) in enumerate(fields)
-    )
-    box = _email_info_box(_email_field(html.escape(ticket_no), html.escape(subject), size=18, weight=700, last=not fields) + rows, accent=accent)
-    body = box + _email_paragraph(html.escape(message)) + _email_button(button, url)
-    return _email_layout(html.escape(heading), body, eyebrow=html.escape(eyebrow), accent=accent)
+def _proposal_email_html(client_name: str, title: str, code: str, total: float, message: str, link: str, sender_name: str) -> str:
+    """Proposal sent to a client: the PDF is attached and the buttons open the public reply page (no login). Values are HTML-escaped."""
+    box = _email_info_box(
+        _email_field(html.escape(code), html.escape(title), size=18, weight=700)
+        + _email_field("Prepared for", html.escape(client_name))
+        + _email_field("Total", f"{total:,.2f}", weight=700, last=True), accent="blue")
+    body = (box + (_email_paragraph(html.escape(message).replace("\n", "<br>"), margin="20px 0 0") if message else "")
+            + _email_paragraph(f"Please find our proposal attached. You can accept it, or ask for changes, using the button below. &mdash; {html.escape(sender_name)}", margin="20px 0 20px")
+            + _email_button("Review & reply", link))
+    return _email_layout(html.escape(title), body, eyebrow="Proposal", accent="blue")
+
+
+def _proposal_reply_email_html(code: str, title: str, client_name: str, action: str, message: str) -> str:
+    """Told to the proposal's owner when the client replies through the public link."""
+    accepted = action == "accept"
+    box = _email_info_box(
+        _email_field(html.escape(code), html.escape(title), size=18, weight=700)
+        + _email_field("Client", html.escape(client_name))
+        + _email_field("Reply", "Accepted" if accepted else "Asked for changes", color="#15803D" if accepted else "#B45309", weight=700, last=not message)
+        + (_email_field("Message", html.escape(message), last=True) if message else ""), accent="green" if accepted else "amber")
+    body = box + _email_paragraph("Open the portal to review it." if not accepted else "A manager still needs to approve the review before the PO can be booked.") + _email_button("Open the portal")
+    return _email_layout("Client replied to a proposal", body, eyebrow="Sales", accent="green" if accepted else "amber")
+
+
+def _cm_followup_digest_email_html(name: str, rows: list) -> str:
+    """Daily digest to a lead owner: follow-ups due today or overdue. ``rows``: (lead label, stage, follow-up date, days overdue)."""
+    lines = "".join(_email_field(html.escape(label), f"{html.escape(stage)} · due {html.escape(due)}" + (f" ({late} day{'s' if late != 1 else ''} overdue)" if late > 0 else " (today)"),
+                                 color="#B91C1C" if late > 0 else "#0F172A", last=i == len(rows) - 1) for i, (label, stage, due, late) in enumerate(rows))
+    body = _email_paragraph(f"Hi {html.escape(name)}, these leads need a follow-up:") + _email_info_box(lines, accent="amber") + _email_paragraph("Log the call or email in the portal and set the next follow-up date.") + _email_button("Open Client Management")
+    return _email_layout("Follow-ups due", body, eyebrow="Sales", accent="amber")
+
+
+def _cm_receivables_email_html(rows: list, total: float) -> str:
+    """Weekly note to Accounts: invoices outstanding for more than 60 days. ``rows``: (client, invoice code, outstanding, age in days)."""
+    lines = "".join(_email_field(html.escape(client), f"{html.escape(code)} · {amount:,.2f} · {age} days", last=i == len(rows) - 1) for i, (client, code, amount, age) in enumerate(rows[:25]))
+    more = _email_paragraph(f"…and {len(rows) - 25} more.") if len(rows) > 25 else ""
+    body = _email_paragraph(f"{len(rows)} invoice(s) totalling {total:,.2f} are more than 60 days old.") + _email_info_box(lines, accent="red") + more + _email_button("Open Client Management")
+    return _email_layout("Overdue receivables", body, eyebrow="Accounts", accent="red")
+
+
+def _send_email_with_attachments(to_address: str, subject: str, html_body: str, attachments: list, category: str = None) -> None:
+    """Send an HTML email with several PDF attachments ``[(filename, bytes)]`` via Gmail SMTP. Skips silently when credentials are missing or the person muted this kind of email."""
+    if email_settings.is_muted(to_address, category):
+        logging.getLogger("hr_portal").info(f"Email '{subject}' not sent: notifications are switched off for {to_address}")
+        return
+    if not GMAIL_USER or not GMAIL_APP_PASSWORD:
+        logging.getLogger("hr_portal").warning("Gmail credentials not set — skipping email send.")
+        return
+    try:
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+        from email.mime.application import MIMEApplication
+        msg = MIMEMultipart("mixed")
+        msg["Subject"] = subject
+        msg["From"] = f"Sparkcurv <{GMAIL_USER}>"
+        msg["To"] = to_address
+        alt = MIMEMultipart("alternative")
+        alt.attach(MIMEText("Please view this email in an HTML-capable client.", "plain"))
+        alt.attach(MIMEText(html_body, "html"))
+        msg.attach(alt)
+        for filename, data in attachments:
+            part = MIMEApplication(data, _subtype="pdf")
+            part.add_header("Content-Disposition", "attachment", filename=filename)
+            msg.attach(part)
+        ctx = ssl.create_default_context()
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ctx, timeout=30) as smtp:
+            smtp.login(GMAIL_USER, GMAIL_APP_PASSWORD)
+            smtp.sendmail(GMAIL_USER, to_address, msg.as_string())
+        logging.getLogger("hr_portal").info(f"Documents emailed to {to_address}")
+    except Exception as e:
+        logging.getLogger("hr_portal").warning(f"Document email failed to {to_address}: {e}")
+
+
+def _cm_documents_email_html(client_name: str, heading: str, documents: list, message: str, sender: str) -> str:
+    """Documents sent to a client (the PDFs are attached). Values are HTML-escaped."""
+    box = _email_info_box("".join(_email_field(html.escape(label), html.escape(name), last=i == len(documents) - 1) for i, (label, name) in enumerate(documents)), accent="blue")
+    body = _email_paragraph(f"Dear {html.escape(client_name)},") + _email_paragraph(html.escape(message) if message else "Please find the attached document(s) from us.") + box + _email_paragraph(f"Regards, {html.escape(sender)}")
+    return _email_layout(html.escape(heading), body, eyebrow="Sparkcurv", accent="blue")
