@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { saveBlobAsFile } from "@/lib/api";
 import { Textarea } from "@/components/ui/textarea";
-import { PromptDialog } from "./LeadDialogs";
+import { PromptDialog } from "./Prompt";
 import { TONES, Pill, apiError, day, money, selectClass, thisMonth, todayStr, label } from "./constants";
 
 const primary = "bg-[#0020F8] text-white hover:bg-[#0019C4] rounded-xl h-10";

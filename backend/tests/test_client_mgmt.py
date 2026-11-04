@@ -7,6 +7,7 @@ on prefixed copies (``zzmig_``) of the tables and never touches real ones. Email
 Run:  cd backend && venv/bin/python -m pytest tests/test_client_mgmt.py -v
 """
 
+import io
 import os
 import sys
 from datetime import datetime, timedelta, timezone
@@ -53,9 +54,9 @@ def db(c, sql, args=(), **kw):
 def _cleanup(c):
     users = [r["id"] for r in db(c, f"SELECT id FROM users WHERE email LIKE '{TAG}-%%@example.com'", fetch_all=True) or []]
     um = ", ".join(["%s"] * len(users)) or "NULL"
-    clients = [r["id"] for r in db(c, f"SELECT id FROM clients WHERE name LIKE '{TAG.upper()}%%'", fetch_all=True) or []]
+    clients = [r["id"] for r in db(c, f"SELECT id FROM clients WHERE name LIKE '%%{TAG.upper()}%%'", fetch_all=True) or []]
     cm = ", ".join(["%s"] * len(clients)) or "NULL"
-    leads = [r["id"] for r in db(c, f"SELECT id FROM leads WHERE created_by IN ({um}) OR owner_id IN ({um}) OR client_id IN ({cm}) OR company_name LIKE '{TAG.upper()}%%'", tuple(users) * 2 + tuple(clients), fetch_all=True) or []]
+    leads = [r["id"] for r in db(c, f"SELECT id FROM leads WHERE created_by IN ({um}) OR owner_id IN ({um}) OR client_id IN ({cm}) OR company_name LIKE '%%{TAG.upper()}%%'", tuple(users) * 2 + tuple(clients), fetch_all=True) or []]
     lm = ", ".join(["%s"] * len(leads)) or "NULL"
     props = [r["id"] for r in db(c, f"SELECT id FROM proposals WHERE lead_id IN ({lm}) OR client_id IN ({cm})", tuple(leads) + tuple(clients), fetch_all=True) or []]
     pm = ", ".join(["%s"] * len(props)) or "NULL"
@@ -74,6 +75,12 @@ def _cleanup(c):
     if cids:
         db(c, f"DELETE FROM contract_files WHERE contract_id IN ({', '.join(['%s'] * len(cids))})", tuple(cids))
     db(c, f"DELETE FROM reminder_log WHERE user_id IN ({um})", tuple(users))
+    fus = [r["id"] for r in db(c, f"SELECT id FROM followups WHERE client_id IN ({cm}) OR company_name LIKE '%%ZZCM%%' OR owner_id IN ({um})", tuple(clients) + tuple(users), fetch_all=True) or []]
+    if fus:
+        fm = ", ".join(["%s"] * len(fus))
+        db(c, f"DELETE FROM followup_steps WHERE followup_id IN ({fm})", tuple(fus))
+        db(c, f"DELETE FROM followups WHERE id IN ({fm})", tuple(fus))
+    db(c, f"DELETE FROM activity_log WHERE client_id IN ({cm}) OR company_name LIKE '%%ZZCM%%' OR created_by IN ({um}) OR owner_id IN ({um})", tuple(clients) + tuple(users) * 2)
     db(c, f"DELETE FROM contracts WHERE client_id IN ({cm}) OR proposal_id IN ({pm})", tuple(clients) + tuple(props))
     db(c, f"DELETE FROM projects WHERE client_id IN ({cm}) OR name LIKE '{TAG.upper()}%%'", tuple(clients))
     db(c, f"DELETE FROM proposal_items WHERE proposal_id IN ({pm})", tuple(props))
@@ -81,6 +88,7 @@ def _cleanup(c):
     db(c, f"DELETE FROM proposals WHERE id IN ({pm})", tuple(props))
     db(c, f"DELETE FROM tenders WHERE lead_id IN ({lm})", tuple(leads))
     db(c, f"DELETE FROM lead_activities WHERE lead_id IN ({lm})", tuple(leads))
+    db(c, f"DELETE FROM opportunities WHERE client_id IN ({cm}) OR created_by IN ({um}) OR owner_id IN ({um}) OR lead_id IN ({lm})", tuple(clients) + tuple(users) * 2 + tuple(leads))
     db(c, f"DELETE FROM leads WHERE id IN ({lm})", tuple(leads))
     db(c, f"DELETE FROM clients WHERE id IN ({cm})", tuple(clients))
     db(c, f"DELETE FROM user_permissions WHERE user_id IN ({um})", tuple(users))
@@ -156,7 +164,7 @@ def new_client(c, who, **extra):
 def new_lead(c, who, **extra):
     as_(c, who)
     u = uniq()
-    body = {"source": "REFERRAL", "company_name": f"ZZCM Lead Co {u}", "contact_name": "Ravi", "phone": f"9{u.zfill(9)[-9:]}", "email": f"{TAG}-lead-{u}@example.com", "estimated_value": 500000, **extra}
+    body = {"source": "Referral", "company_name": f"ZZCM Lead Co {u}", "contact_person": "Ravi", "phone": f"9{u.zfill(9)[-9:]}", "email": f"{TAG}-lead-{u}@example.com", "location": "Chennai", **extra}
     r = c.post(f"{R}/leads", json=body)
     assert r.status_code == 200, r.text
     return r.json()
@@ -164,17 +172,18 @@ def new_lead(c, who, **extra):
 ITEM = {"description": "Consulting", "quantity": 10, "unit": "days", "rate": 1000, "cost": 600}     # total 10,000, cost 6,000
 
 def qualified_lead(c, who, **lead_extra):
+    """A lead converted to an opportunity (its account is created); returns the opportunity. The account gets the usual TDS / retention defaults the invoices pick up."""
     lead = new_lead(c, who, **lead_extra)
     as_(c, who)
-    r = c.post(f"{R}/leads/{lead['id']}/qualify", json={"create_client": True})
+    r = c.post(f"{R}/leads/{lead['id']}/convert", json={"deal_value": 365000})
     assert r.status_code == 200, r.text
-    # the client created from a lead starts with no TDS / retention; give it the usual defaults the invoices should pick up
-    assert c.put(f"{R}/clients/{r.json()['client_id']}", json={"default_tds_pct": 2, "default_retention_pct": 5}).status_code == 200
-    return r.json()
+    opp = r.json()["opportunity"]
+    assert c.put(f"{R}/clients/{opp['client_id']}", json={"default_tds_pct": 2, "default_retention_pct": 5}).status_code == 200
+    return opp
 
-def new_proposal(c, who, lead, items=None, **extra):
+def new_proposal(c, who, opp, items=None, **extra):
     as_(c, who)
-    r = c.post(f"{R}/leads/{lead['id']}/to-proposal", json={"title": f"ZZCM Proposal {uniq()}", "terms": "Net 30", "items": items if items is not None else [ITEM], **extra})
+    r = c.post(f"{R}/opportunities/{opp['id']}/proposals", json={"title": f"ZZCM Proposal {uniq()}", "terms": "Net 30", "items": items if items is not None else [ITEM], **extra})
     assert r.status_code == 200, r.text
     return r.json()
 
@@ -232,12 +241,12 @@ def test_migration_upgrade_downgrade_upgrade_is_clean_on_empty_tables(client):
 
     run(schema.upgrade(p))
     assert run(schema.table_names(p)) == expected
-    assert run(schema.current_revision(p)) == schema.REVISION == "client_mgmt_001"
+    assert run(schema.current_revision(p)) == schema.REVISION == "client_mgmt_002"
     cols = {r["Field"] for r in db(c, f"SHOW COLUMNS FROM {p}clients", fetch_all=True)}
     assert {"code", "gstin", "billing_address", "contact_person", "default_tds_pct", "default_retention_pct"} <= cols
     assert {"client_id", "contract_id"} <= {r["Field"] for r in db(c, f"SHOW COLUMNS FROM {p}projects", fetch_all=True)}
     run(schema.upgrade(p))                                                         # idempotent
-    assert run(schema.table_names(p)) == expected and db(c, f"SELECT COUNT(*) AS n FROM {p}schema_revisions", fetch_one=True)["n"] == 1
+    assert run(schema.table_names(p)) == expected and db(c, f"SELECT COUNT(*) AS n FROM {p}schema_revisions", fetch_one=True)["n"] == 2
 
     db(c, f"INSERT INTO {p}clients (name, status, created_at) VALUES ('probe', 'active', 'now')")
     run(schema.downgrade(p))
@@ -257,65 +266,6 @@ def test_migration_upgrade_downgrade_upgrade_is_clean_on_empty_tables(client):
 
 
 # ---------------------------------------------------------------- the full chain
-
-def test_full_chain_lead_to_engagement(client, people):
-    c = client
-    lead = new_lead(c, people["sales_a"], company_name="ZZCM Chain Co", contact_name=None, phone=None, email=None, estimated_value=None)
-    as_(c, people["sales_a"])
-    # qualification: exact list of what is missing
-    bad = c.post(f"{R}/leads/{lead['id']}/qualify", json={})
-    assert bad.status_code == 400
-    assert bad.json()["detail"]["missing"] == ["client", "contact name", "phone or email", "estimated value (greater than zero)"] or "client" in bad.json()["detail"]["missing"][0]
-    assert set(m.split(" (")[0] for m in bad.json()["detail"]["missing"]) == {"client", "contact name", "phone or email", "estimated value"}
-    assert c.put(f"{R}/leads/{lead['id']}", json={"contact_name": "Mr Chain", "email": f"{TAG}-chain-{uniq()}@example.com", "estimated_value": 750000}).status_code == 200
-    still = c.post(f"{R}/leads/{lead['id']}/qualify", json={}).json()["detail"]["missing"]
-    assert len(still) == 1 and still[0].startswith("client")                                  # only the client is left
-    q = c.post(f"{R}/leads/{lead['id']}/qualify", json={"create_client": True, "note": "Budget confirmed"})
-    assert q.status_code == 200 and q.json()["stage"] == "QUALIFIED" and q.json()["client_id"]
-    client_row = c.get(f"{R}/clients/{q.json()['client_id']}").json()
-    assert client_row["name"] == "ZZCM Chain Co" and client_row["code"].startswith("CLI-") and client_row["contact_person"] == "Mr Chain"
-
-    # tender (optional) then proposal
-    t = c.post(f"{R}/leads/{lead['id']}/to-tender", json={"reference": "TND-77", "due_date": "2026-12-01"}).json()
-    assert t["status"] == "OPEN" and c.get(f"{R}/leads/{lead['id']}").json()["stage"] == "TENDER"
-    prop = c.post(f"{R}/leads/{lead['id']}/to-proposal", json={"title": "ZZCM Chain proposal", "items": [ITEM, {"description": "Licences", "quantity": 2, "unit": "nos", "rate": 5000, "cost": 4000}]}).json()
-    assert prop["status"] == "DRAFT" and prop["tender_id"] == t["id"] and prop["total_amount"] == 20000.0 and prop["total_cost"] == 14000.0 and prop["margin"] == 6000.0
-    assert c.get(f"{R}/leads/{lead['id']}").json()["stage"] == "PROPOSAL"
-
-    # send: the email carries a PDF and a public link
-    before = len(PDF_EMAILS)
-    sent = c.post(f"{R}/proposals/{prop['id']}/send", json={"to": f"{TAG}-client-{uniq()}@example.com", "message": "Hello!"})
-    assert sent.status_code == 200 and sent.json()["status"] == "SENT" and sent.json()["review_status"] == "PENDING" and sent.json()["sent_at"]
-    assert wait_for(lambda: len(PDF_EMAILS) == before + 1)
-    to, subject, html, pdf, filename, category = PDF_EMAILS[-1]
-    token = db(c, "SELECT public_token FROM proposals WHERE id = %s", (prop["id"],), fetch_one=True)["public_token"]
-    assert pdf[:4] == b"%PDF" and filename == f"{prop['code']}.pdf" and category == "sales" and f"/api/public/proposals/{token}/page" in html
-    assert c.get(f"{R}/proposals/{prop['id']}/pdf").content[:4] == b"%PDF"
-
-    # review by a manager, then the PO
-    as_(c, people["mgr"])
-    assert c.post(f"{R}/proposals/{prop['id']}/review", json={"status": "APPROVED", "note": "Scope looks right"}).status_code == 200
-    po = c.post(f"{R}/proposals/{prop['id']}/book-po", json={**PO, "contract_value": None})
-    assert po.status_code == 200, po.text
-    k = po.json()
-    assert k["status"] == "DRAFT" and k["contract_value"] == 20000.0 and k["estimated_cost"] == 14000.0 and k["margin"] == 6000.0 and k["margin_pct"] == 30.0
-    assert (k["po_reference"], k["start_date"], k["end_date"], k["client_id"]) == ("PO-7788", "2026-01-01", "2026-12-31", q.json()["client_id"]) and k["code"].startswith("CTR-")
-    assert c.get(f"{R}/proposals/{prop['id']}").json()["status"] == "ACCEPTED"
-    assert c.get(f"{R}/leads/{lead['id']}").json()["stage"] == "WON" and c.get(f"{R}/leads/{lead['id']}").json()["won_at"]
-    assert c.get(f"{R}/leads/{lead['id']}/tenders").json()[0]["status"] == "WON"
-
-    # engagement: one click creates a project on the project board and the contract goes ACTIVE
-    eng = c.post(f"{R}/contracts/{k['id']}/engagement", json={})
-    assert eng.status_code == 200 and eng.json()["status"] == "ACTIVE" and eng.json()["engagement_project_id"]
-    project = db(c, "SELECT * FROM projects WHERE id = %s", (eng.json()["engagement_project_id"],), fetch_one=True)
-    assert project["client_id"] == q.json()["client_id"] and project["contract_id"] == k["id"] and project["status"] == "active" and "ZZCM Chain Co" in project["name"]
-    assert c.post(f"{R}/contracts/{k['id']}/engagement", json={}).status_code == 400                       # already active
-
-    # every stage change is in the log with who, when and a note
-    log = c.get(f"{R}/leads/{lead['id']}/activities").json()
-    changes = [a for a in log if a["kind"] == "STAGE_CHANGE"]
-    assert [a["body"].split(" — ")[0] for a in reversed(changes)][:5] == ["Lead created (NEW)", "NEW → QUALIFIED", "QUALIFIED → TENDER", "TENDER → PROPOSAL", "PROPOSAL → WON"]
-    assert all(a["by_user_name"] and a["at"] for a in changes) and any("Budget confirmed" in a["body"] for a in changes)
 
 
 def test_po_cannot_be_booked_before_send_and_review_approval(client, people):
@@ -608,8 +558,8 @@ def test_public_proposal_reply_link_needs_no_login_and_exposes_only_that_proposa
     row2 = db(c, "SELECT status, review_status, client_response FROM proposals WHERE id = %s", (p2["id"],), fetch_one=True)
     assert row2 == {"status": "SENT", "review_status": "PENDING", "client_response": "ACCEPTED"}                    # an accept alone does not approve the review or book a PO
     as_(c, people["sales_a"])
-    log = c.get(f"{R}/leads/{p1['lead_id']}/activities").json()
-    assert any("Client reply" in a["body"] and "asked for changes" in a["body"] and a["by_user_name"] == "Asha (client)" for a in log)
+    log = c.get(f"{R}/activity", params={"opportunity_id": p1["opportunity_id"]}).json()
+    assert any("Client reply" in a["notes"] and "asked for changes" in a["notes"] and a["bdr"] == "Asha (client)" for a in log)
     # once the PO is booked the link is read-only
     approve(c, people["mgr"], p2["id"])
     as_(c, people["mgr"])
@@ -625,80 +575,7 @@ def test_public_proposal_reply_link_needs_no_login_and_exposes_only_that_proposa
 
 # ---------------------------------------------------------------- duplicates, import, leads
 
-def test_duplicate_protection_for_clients_and_leads(client, people):
-    c = client
-    first = new_client(c, people["sales_a"], name="ZZCM Dup Industries", gstin="29ZZCMDUP0001Z5")
-    as_(c, people["sales_a"])
-    same_name = c.post(f"{R}/clients", json={"name": "zzcm dup industries"})
-    assert same_name.status_code == 409 and same_name.json()["detail"]["can_confirm"] is False and same_name.json()["detail"]["duplicates"][0]["id"] == first["id"]
-    same_gstin = c.post(f"{R}/clients", json={"name": "ZZCM Another Name", "gstin": "29zzcmdup0001z5"})
-    assert same_gstin.status_code == 409 and same_gstin.json()["detail"]["can_confirm"] is True and same_gstin.json()["detail"]["duplicates"][0]["matched_on"] == ["gstin"]
-    assert c.post(f"{R}/clients", json={"name": "ZZCM Another Name", "gstin": "29ZZCMDUP0001Z5", "confirm_duplicate": True}).status_code == 200
-    assert c.post(f"{R}/clients", json={"name": "ZZCM Bad", "gstin": "no spaces!"}).status_code == 400
-    assert c.post(f"{R}/clients", json={"name": "ZZCM Pct", "default_tds_pct": 120}).status_code == 400
-    assert c.put(f"{R}/clients/{first['id']}", json={"name": "ZZCM Another Name"}).status_code == 409
-    assert c.put(f"{R}/clients/{first['id']}", json={"default_tds_pct": 10, "is_active": False}).json()["is_active"] is False
 
-    lead = new_lead(c, people["sales_a"], email=f"{TAG}-dup-{uniq()}@example.com", phone="+91 98765-43210")
-    as_(c, people["sales_b"])
-    by_email = c.post(f"{R}/leads", json={"company_name": "ZZCM Someone", "email": lead["email"].upper()})
-    assert by_email.status_code == 409 and by_email.json()["detail"]["duplicates"][0]["matched_on"] == ["email"]
-    by_phone = c.post(f"{R}/leads", json={"company_name": "ZZCM Someone", "phone": "09876543210"})
-    assert by_phone.status_code == 409 and by_phone.json()["detail"]["duplicates"][0]["matched_on"] == ["phone"]
-    assert c.post(f"{R}/leads", json={"company_name": "ZZCM Someone", "phone": "09876543210", "confirm_duplicate": True}).status_code == 200
-    assert c.post(f"{R}/leads", json={}).status_code == 400
-    assert c.post(f"{R}/leads", json={"company_name": "ZZCM x", "email": "nope"}).status_code == 400
-    assert c.post(f"{R}/leads", json={"company_name": "ZZCM x", "estimated_value": -5}).status_code == 400
-    assert c.post(f"{R}/leads", json={"company_name": "ZZCM x", "source": "SMOKE_SIGNAL"}).status_code == 400
-
-
-def test_bulk_import_reports_created_skipped_and_errors(client, people):
-    c = client
-    existing = new_lead(c, people["sales_a"])
-    as_(c, people["sales_a"])
-    u = uniq()
-    rows = [{"company_name": f"ZZCM Imp A {u}", "email": f"{TAG}-imp-a-{u}@example.com", "estimated_value": 1000},
-            {"company_name": f"ZZCM Imp B {u}", "phone": "9000012345"},
-            {"company_name": "ZZCM Imp existing", "email": existing["email"]},                         # duplicate of an existing lead
-            {"company_name": f"ZZCM Imp A again {u}", "email": f"{TAG}-IMP-A-{u}@example.com"},       # duplicate of an earlier row
-            {},                                                                                       # empty
-            {"company_name": "ZZCM Imp bad", "email": "broken"}]
-    r = c.post(f"{R}/leads/import", json={"rows": rows}).json()
-    assert r["summary"] == {"created": 2, "skipped": 2, "errors": 2}
-    assert [x["row"] for x in r["created"]] == [1, 2] and [x["row"] for x in r["skipped_duplicates"]] == [3, 4] and [x["row"] for x in r["errors"]] == [5, 6]
-    assert r["skipped_duplicates"][0]["duplicates"][0]["code"] == existing["code"]
-    forced = c.post(f"{R}/leads/import", json={"rows": [rows[2]], "confirm_duplicate": True}).json()
-    assert forced["summary"]["created"] == 1
-    assert c.post(f"{R}/leads/import", json={"rows": []}).status_code == 400
-    assert c.post(f"{R}/leads/import", json={"rows": [{"company_name": "x"}] * 501}).status_code == 400
-
-
-def test_lead_stage_moves_follow_ups_and_lost_reasons(client, people):
-    c = client
-    lead = new_lead(c, people["sales_a"], next_followup_at="2020-01-01")
-    as_(c, people["sales_a"])
-    assert c.post(f"{R}/leads/{lead['id']}/stage", json={"stage": "CONTACTED", "note": "Called, interested"}).json()["stage"] == "CONTACTED"
-    for stage in ("QUALIFIED", "TENDER", "PROPOSAL", "WON"):                                              # these have their own actions with their own rules
-        assert c.post(f"{R}/leads/{lead['id']}/stage", json={"stage": stage}).status_code == 400, stage
-    assert c.post(f"{R}/leads/{lead['id']}/stage", json={"stage": "CONTACTED"}).status_code == 400
-    assert c.post(f"{R}/leads/{lead['id']}/stage", json={"stage": "LOST"}).status_code == 400                # needs a reason
-    # the overdue list
-    overdue = {x["id"] for x in c.get(f"{R}/leads?overdue=true").json()}
-    assert lead["id"] in overdue and c.get(f"{R}/leads/{lead['id']}").json()["followup_overdue"] is True
-    future = new_lead(c, people["sales_a"], next_followup_at=(datetime.now(timezone.utc) + timedelta(days=30)).strftime("%Y-%m-%d"))
-    assert future["id"] not in {x["id"] for x in c.get(f"{R}/leads?overdue=true").json()} and future["followup_overdue"] is False
-    act = c.post(f"{R}/leads/{lead['id']}/activities", json={"kind": "CALL", "body": "Left a voicemail", "next_followup_at": "2099-01-01"}).json()["activities"]
-    assert act[0]["kind"] == "CALL" and act[0]["by_user_name"] == people["sales_a"]["name"] and lead["id"] not in {x["id"] for x in c.get(f"{R}/leads?overdue=true").json()}
-    assert c.post(f"{R}/leads/{lead['id']}/activities", json={"kind": "STAGE_CHANGE", "body": "x"}).status_code == 400
-    assert c.post(f"{R}/leads/{lead['id']}/activities", json={"kind": "NOTE", "body": " "}).status_code == 400
-    lost = c.post(f"{R}/leads/{lead['id']}/stage", json={"stage": "LOST", "lost_reason": "Budget cut", "note": "Client froze spending"}).json()
-    assert lost["stage"] == "LOST" and lost["lost_reason"] == "Budget cut" and lost["lost_at"]
-    assert c.put(f"{R}/leads/{lead['id']}", json={"contact_name": "x"}).status_code == 400                   # closed leads are frozen
-    assert c.post(f"{R}/leads/{lead['id']}/stage", json={"stage": "NEW"}).status_code == 403                # only a manager reopens
-    as_(c, people["mgr"])
-    assert c.post(f"{R}/leads/{lead['id']}/stage", json={"stage": "NEW", "note": "Budget is back"}).json()["stage"] == "NEW"
-    log = c.get(f"{R}/leads/{lead['id']}/activities").json()
-    assert [a["body"].split(" — ")[0] for a in reversed([a for a in log if a["kind"] == "STAGE_CHANGE"])] == ["Lead created (NEW)", "NEW → CONTACTED", "CONTACTED → LOST", "LOST → NEW"]
 
 
 def test_contract_engagement_link_edit_and_status(client, people):
@@ -742,8 +619,9 @@ def test_proposal_files_are_validated_and_owner_only(client, people):
 
 def test_permissions_per_role(client, people):
     c = client
-    lead_a = qualified_lead(c, people["sales_a"])
-    prop_a = new_proposal(c, people["sales_a"], lead_a)
+    opp_a = qualified_lead(c, people["sales_a"])
+    prop_a = new_proposal(c, people["sales_a"], opp_a)
+    lead_a = new_lead(c, people["sales_a"])
     lead_b = new_lead(c, people["sales_b"])
     _, _, k = active_contract(c, people)
     inv = posted_invoice(c, people, k, "2026-01")
@@ -752,7 +630,7 @@ def test_permissions_per_role(client, people):
     as_(c, people["sales_a"])
     mine = {x["id"] for x in c.get(f"{R}/leads").json()}
     assert lead_a["id"] in mine and lead_b["id"] not in mine
-    assert c.get(f"{R}/leads/{lead_b['id']}").status_code == 404 and c.put(f"{R}/leads/{lead_b['id']}", json={"contact_name": "x"}).status_code == 404
+    assert c.get(f"{R}/leads/{lead_b['id']}").status_code == 404 and c.put(f"{R}/leads/{lead_b['id']}", json={"contact_person": "x"}).status_code == 404
     assert c.get(f"{R}/proposals/{prop_a['id']}").status_code == 200
     assert {p["id"] for p in c.get(f"{R}/proposals").json()} >= {prop_a["id"]}
     assert c.post(f"{R}/proposals/{prop_a['id']}/review", json={"status": "APPROVED"}).status_code == 403
@@ -771,12 +649,12 @@ def test_permissions_per_role(client, people):
     # --- Sales (view only): reads everything, writes nothing
     as_(c, people["sales_view"])
     assert {lead_a["id"], lead_b["id"]} <= {x["id"] for x in c.get(f"{R}/leads").json()} and c.get(f"{R}/proposals/{prop_a['id']}").status_code == 200
-    assert c.post(f"{R}/leads", json={"company_name": "ZZCM x"}).status_code == 403 and c.put(f"{R}/leads/{lead_a['id']}", json={"contact_name": "x"}).status_code == 403
-    assert c.post(f"{R}/clients", json={"name": "ZZCM viewer client"}).status_code == 403 and c.post(f"{R}/leads/{lead_a['id']}/stage", json={"stage": "CONTACTED"}).status_code == 403
-    assert c.get(f"{R}/kpis").status_code == 200 and c.get(f"{R}/pipeline").status_code == 200
+    assert c.post(f"{R}/leads", json={"company_name": "ZZCM x"}).status_code == 403 and c.put(f"{R}/leads/{lead_a['id']}", json={"contact_person": "x"}).status_code == 403
+    assert c.post(f"{R}/clients", json={"name": "ZZCM viewer client"}).status_code == 403 and c.post(f"{R}/leads/{lead_a['id']}/convert", json={}).status_code == 403
+    assert c.get(f"{R}/dashboard").status_code == 200 and c.get(f"{R}/opportunities").status_code == 200
     # --- Manager (delete): everything on the sales side, anyone's work
     as_(c, people["mgr"])
-    assert c.get(f"{R}/leads/{lead_b['id']}").status_code == 200 and c.put(f"{R}/leads/{lead_b['id']}", json={"contact_name": "Reassigned"}).status_code == 200
+    assert c.get(f"{R}/leads/{lead_b['id']}").status_code == 200 and c.put(f"{R}/leads/{lead_b['id']}", json={"contact_person": "Reassigned"}).status_code == 200
     assert c.put(f"{R}/leads/{lead_b['id']}", json={"owner_id": people["sales_a"]["id"]}).json()["owner_id"] == people["sales_a"]["id"]
     assert c.get(f"{R}/invoices").status_code == 403                                                                     # but not accounting
     # --- Accounts (edit): invoices, payments, advances, ledger; read-only on clients and contracts; no sales actions
@@ -788,7 +666,7 @@ def test_permissions_per_role(client, people):
     assert c.post(f"{R}/proposals/{prop_a['id']}/book-po", json=PO).status_code == 403
     # --- Accounts (view only): reads, can't post / pay / reverse
     as_(c, people["acct_view"])
-    assert c.get(f"{R}/invoices").status_code == 200 and c.get(f"{R}/kpis").status_code == 200
+    assert c.get(f"{R}/invoices").status_code == 200 and c.get(f"{R}/dashboard").status_code == 200
     assert c.post(f"{R}/invoices/{inv['id']}/cancel", json={"reason": "x"}).status_code == 403
     assert c.post(f"{R}/payments", json={"client_id": k["client_id"], "amount": 1, "payment_date": "2026-01-01"}).status_code == 403
     assert c.post(f"{R}/advances", json={"client_id": k["client_id"], "amount": 1, "advance_date": "2026-01-01"}).status_code == 403
@@ -796,80 +674,36 @@ def test_permissions_per_role(client, people):
     # --- nobody else
     for who in ("plain", "plain_mgr"):
         as_(c, people[who])
-        for url in ("clients", "leads", "proposals", "contracts", "invoices", "payments", "advances", "ledger", "pipeline", "kpis"):
+        for url in ("clients", "leads", "proposals", "contracts", "invoices", "payments", "advances", "ledger", "opportunities", "followups", "activity", "dashboard"):
             assert c.get(f"{R}/{url}").status_code == 403, (who, url)
         assert c.post(f"{R}/leads", json={"company_name": "ZZCM x"}).status_code == 403
     c.cookies.clear()
-    assert c.get(f"{R}/leads").status_code == 401 and c.get(f"{R}/kpis").status_code == 401
+    assert c.get(f"{R}/leads").status_code == 401 and c.get(f"{R}/dashboard").status_code == 401
     # an admin can do all of it
     as_(c, people["admin"])
-    assert c.get(f"{R}/invoices").status_code == 200 and c.get(f"{R}/leads").status_code == 200 and c.get(f"{R}/pipeline").status_code == 200
+    assert c.get(f"{R}/invoices").status_code == 200 and c.get(f"{R}/leads").status_code == 200 and c.get(f"{R}/opportunities").status_code == 200
 
 
 # ---------------------------------------------------------------- KPIs and the pipeline summary
 
-def test_kpis_and_pipeline_for_a_fresh_salesperson_return_null_not_zero(client, people):
-    c = client
-    fresh = _mk_user(c, f"fresh-{uniq()}", "manager", {"sales": (1, 1, 0)})
-    as_(c, fresh)
-    k = c.get(f"{R}/kpis").json()
-    assert (k["lead_to_proposal_pct"], k["win_rate_pct"], k["avg_days_lead_to_po"], k["receivables_overdue_60"]) == (None, None, None, None)
-    assert k["leads"] == {"total": 0, "with_proposal": 0, "won": 0, "lost": 0} and all(v == {"count": 0, "value": 0.0} for v in k["pipeline_value_by_stage"].values())
-    pl = c.get(f"{R}/pipeline").json()
-    assert pl["overdue_followups"] == 0 and [s["count"] for s in pl["steps"]] == [0] * 7 and [s["step"] for s in pl["steps"]][0] == "Lead Capture"
-    as_(c, people["acct_view"])
-    assert c.get(f"{R}/kpis").json()["lead_to_proposal_pct"] is None                                      # accounts-only: no sales figures
-
-
-def test_kpi_formulas_and_pipeline_summary(client, people):
-    c = client
-    me = _mk_user(c, f"kpi-{uniq()}", "manager", {"sales": (1, 1, 0)})                                  # a Sales user owns the leads, so the figures are exact for this user only
-    mgr_ctx = people["mgr"]
-    won1 = qualified_lead(c, me, estimated_value=100000)                                                 # → proposal → PO (won)
-    won2 = qualified_lead(c, me, estimated_value=200000)
-    lost = new_lead(c, me, estimated_value=50000)
-    open_q = qualified_lead(c, me, estimated_value=300000)                                               # qualified, no proposal
-    open_new = new_lead(c, me, estimated_value=10000, next_followup_at="2020-01-01")                      # overdue follow-up
-    for lead in (won1, won2):
-        prop = new_proposal(c, me, lead)
-        assert send(c, me, prop["id"]).status_code == 200 and approve(c, mgr_ctx, prop["id"]).status_code == 200
-        as_(c, mgr_ctx)
-        assert c.post(f"{R}/proposals/{prop['id']}/book-po", json=PO).status_code == 200
-    as_(c, me)
-    assert c.post(f"{R}/leads/{lost['id']}/stage", json={"stage": "LOST", "lost_reason": "Price"}).status_code == 200
-    now = datetime.now(timezone.utc)
-    db(c, "UPDATE leads SET created_at = %s, won_at = %s WHERE id = %s", ((now - timedelta(days=10)).isoformat(), now.isoformat(), won1["id"]))
-    db(c, "UPDATE leads SET created_at = %s, won_at = %s WHERE id = %s", ((now - timedelta(days=20)).isoformat(), now.isoformat(), won2["id"]))
-    as_(c, me)
-    k = c.get(f"{R}/kpis").json()
-    assert k["leads"] == {"total": 5, "with_proposal": 2, "won": 2, "lost": 1}
-    assert k["lead_to_proposal_pct"] == 40.0                                                              # 2 of 5 leads got a proposal
-    assert k["win_rate_pct"] == round(2 * 100 / 3, 2)                                                     # won / (won + lost)
-    assert k["avg_days_lead_to_po"] == 15.0                                                               # (10 + 20) / 2
-    st = k["pipeline_value_by_stage"]
-    assert st["WON"] == {"count": 2, "value": 300000.0} and st["LOST"] == {"count": 1, "value": 50000.0} and st["QUALIFIED"] == {"count": 1, "value": 300000.0} and st["NEW"] == {"count": 1, "value": 10000.0}
-    pl = c.get(f"{R}/pipeline").json()
-    assert pl["leads_by_stage"]["WON"]["count"] == 2 and pl["proposals"]["ACCEPTED"] == 2 and pl["contracts"]["DRAFT"] == 2 and pl["overdue_followups"] == 1
-    assert {s["step"]: s["count"] for s in pl["steps"]} == {"Lead Capture": 1, "Qualify": 1, "Proposal Sent": 0, "Review": 0, "PO Won": 2, "Convert to Engagement": 2, "Closed": 3}
-    assert open_q["id"] and open_new["id"]
 
 
 def test_receivables_overdue_over_60_days(client, people):
     c = client
     _, _, k = active_contract(c, people, contract_value=100000, start_date="2026-01-01", end_date="2026-01-31")
     as_(c, people["acct"])
-    before = c.get(f"{R}/kpis").json()["receivables_overdue_60"]
+    before = c.get(f"{R}/dashboard").json()["kpis"]["receivables_overdue_60"]
     old = posted_invoice(c, people, k, "2026-01", tax_pct=0, tds_pct=0, retention_pct=0, gross_amount=60000)
     recent = posted_invoice(c, people, k, "2026-02", tax_pct=0, tds_pct=0, retention_pct=0, gross_amount=40000)
     db(c, "UPDATE invoices SET invoice_date = %s WHERE id = %s", ((datetime.now(timezone.utc) - timedelta(days=75)).strftime("%Y-%m-%d"), old["id"]))
     db(c, "UPDATE invoices SET invoice_date = %s WHERE id = %s", ((datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d"), recent["id"]))
     as_(c, people["acct"])
-    after = c.get(f"{R}/kpis").json()["receivables_overdue_60"]
+    after = c.get(f"{R}/dashboard").json()["kpis"]["receivables_overdue_60"]
     base_amount, base_n = (before["amount"], before["invoices"]) if before else (0.0, 0)
     assert after["amount"] - base_amount == 60000.0 and after["invoices"] - base_n == 1                    # only the 75-day-old invoice counts
     pay = c.post(f"{R}/payments", json={"client_id": k["client_id"], "amount": 25000, "payment_date": "2026-03-01"}).json()
     c.post(f"{R}/payments/{pay['id']}/post", json={"allocations": [{"invoice_id": old["id"], "amount": 25000}]})
-    assert c.get(f"{R}/kpis").json()["receivables_overdue_60"]["amount"] - base_amount == 35000.0           # part-paid: only what is still outstanding
+    assert c.get(f"{R}/dashboard").json()["kpis"]["receivables_overdue_60"]["amount"] - base_amount == 35000.0           # part-paid: only what is still outstanding
     ledger = c.get(f"{R}/clients/{k['client_id']}/ledger").json()
     assert {i["code"]: i["overdue_60"] for i in ledger["open_invoices"]} == {old["code"]: True, recent["code"]: False}
 
@@ -973,56 +807,7 @@ def test_alerts_aging_and_dashboard_follow_access(client, people):
     assert c.get(f"{R}/alerts").status_code == 403 and c.get(f"{R}/dashboard").status_code == 403
 
 
-def test_overdue_follow_up_and_expired_proposal_alerts_for_the_owner(client, people):
-    c = client
-    lead = qualified_lead(c, people["sales_a"])
-    as_(c, people["sales_a"])
-    c.put(f"{R}/leads/{lead['id']}", json={"next_followup_at": "2020-01-01"})
-    prop = new_proposal(c, people["sales_a"], lead, valid_until="2020-02-01")
-    alerts = c.get(f"{R}/alerts").json()
-    assert any(a["kind"] == "FOLLOWUP" and a["lead_id"] == lead["id"] and a["severity"] == "high" for a in alerts)
-    assert any(a["kind"] == "PROPOSAL_EXPIRED" and a["proposal_id"] == prop["id"] for a in alerts)
-    as_(c, people["sales_b"])        # another salesperson must not see them
-    assert not any(a.get("lead_id") == lead["id"] or a.get("proposal_id") == prop["id"] for a in c.get(f"{R}/alerts").json())
 
-
-def test_csv_exports_are_scoped_and_safe(client, people):
-    c = client
-    lead = qualified_lead(c, people["sales_a"], company_name=f"=SUM(1+1) {TAG.upper()} {uniq()}")
-    as_(c, people["sales_a"])
-    r = c.get(f"{R}/reports/leads.csv")
-    assert r.status_code == 200 and r.headers["content-type"].startswith("text/csv") and "attachment" in r.headers["content-disposition"]
-    body = r.content.decode("utf-8-sig")
-    assert body.splitlines()[0].startswith("Code,Company") and f"'{lead['company_name']}" in body        # formula-looking text is defused with a leading apostrophe
-    assert c.get(f"{R}/reports/invoices.csv").status_code == 403 and c.get(f"{R}/reports/nope.csv").status_code == 404
-    as_(c, people["sales_b"])
-    assert lead["company_name"] not in c.get(f"{R}/reports/leads.csv").content.decode("utf-8-sig")        # only their own leads
-    as_(c, people["acct"])
-    for name in ("invoices", "payments", "receivables", "ledger", "contracts"):
-        assert c.get(f"{R}/reports/{name}.csv").status_code == 200, name
-    assert c.get(f"{R}/reports/leads.csv").status_code == 403
-
-
-def test_reminder_digests_send_once_per_person_per_day(client, people):
-    from app.services import cm_reminders
-    c = client
-    sent = []
-    cm_reminders._send = lambda to, subject, html: sent.append((to, subject, html))
-    lead = qualified_lead(c, people["sales_a"])
-    as_(c, people["sales_a"])
-    c.put(f"{R}/leads/{lead['id']}", json={"next_followup_at": "2020-01-01"})
-    monday = datetime(2030, 1, 7, 9, 30, tzinfo=timezone.utc).astimezone(cm_reminders.APP_TIMEZONE).replace(hour=9, minute=30)
-    assert monday.weekday() == 0
-    n = c.portal.call(lambda: cm_reminders.send_followup_digests(monday))
-    mine = [m for m in sent if m[0] == people["sales_a"]["email"]]
-    assert n >= 1 and len(mine) == 1 and "Follow-ups due" in mine[0][1] and "overdue" in mine[0][2]
-    c.portal.call(lambda: cm_reminders.send_followup_digests(monday))
-    assert len([m for m in sent if m[0] == people["sales_a"]["email"]]) == 1                    # same day: not again
-    saturday = monday.replace(day=monday.day + 5)
-    assert c.portal.call(lambda: cm_reminders.send_followup_digests(saturday)) == 0           # weekends are quiet
-    early = monday.replace(hour=6)
-    assert c.portal.call(lambda: cm_reminders.send_followup_digests(early)) == 0              # before the reminder time
-    db(c, "DELETE FROM reminder_log WHERE kind IN ('cm_followup', 'cm_receivables') AND date = %s", (monday.strftime("%Y-%m-%d"),))
 
 
 def test_only_superadmin_grants_give_management_access(client, people):
@@ -1046,43 +831,6 @@ def test_only_superadmin_grants_give_management_access(client, people):
     assert can_grant({"role": "admin", "email": sorted(SUPERADMIN_EMAILS)[0]}, "manager") and can_grant({"role": "admin", "email": sorted(SUPERADMIN_EMAILS)[0]}, "employee")
     assert not can_grant({"role": "admin", "email": "someone-else@example.com"}, "manager") and not can_grant({"role": "admin", "email": "someone-else@example.com"}, "employee")
 
-
-def test_public_web_form_creates_unassigned_website_leads_with_guards(client, people):
-    from app.services import cm_webform
-    c = client
-    cm_webform._hits.clear()
-    page = c.get("/api/public/lead-form")
-    assert page.status_code == 200 and "text/html" in page.headers["content-type"] and "name=website" in page.text         # no login needed; honeypot present
-    u = uniq()
-    body = {"name": "Web Visitor", "company": f"ZZCM Web Co {u}", "email": f"{TAG}-web-{u}@example.com", "phone": "", "message": "Need a portal built", "website": ""}
-    c.cookies.clear()
-    assert c.post("/api/public/lead-form", json=body).status_code == 200
-    row = db(c, "SELECT * FROM leads WHERE email_norm = %s", (body["email"],), fetch_one=True)
-    assert row and row["source"] == "WEBSITE" and row["stage"] == "NEW" and row["owner_id"] is None and row["code"].startswith("LEAD-")
-    act = db(c, "SELECT by_user_name, body FROM lead_activities WHERE lead_id = %s ORDER BY id", (row["id"],), fetch_all=True)
-    assert any("Need a portal built" in a["body"] for a in act) and act[0]["by_user_name"] == "Web form"
-    # a manager sees it (and can assign it); a salesperson with no leads of their own doesn't
-    as_(c, people["mgr"])
-    assert any(l["id"] == row["id"] for l in c.get(f"{R}/leads").json())
-    as_(c, people["sales_b"])
-    assert not any(l["id"] == row["id"] for l in c.get(f"{R}/leads").json())
-    # the same person again: a note on the existing lead, not a second lead
-    c.cookies.clear()
-    assert c.post("/api/public/lead-form", json={**body, "message": "Following up"}).status_code == 200
-    assert db(c, "SELECT COUNT(*) AS n FROM leads WHERE email_norm = %s", (body["email"],), fetch_one=True)["n"] == 1
-    assert any("Following up" in a["body"] for a in db(c, "SELECT body FROM lead_activities WHERE lead_id = %s", (row["id"],), fetch_all=True))
-    # bots (honeypot) look successful but store nothing; bad input is refused
-    bot = {**body, "email": f"{TAG}-bot-{u}@example.com", "website": "http://spam"}
-    assert c.post("/api/public/lead-form", json=bot).status_code == 200
-    assert db(c, "SELECT COUNT(*) AS n FROM leads WHERE email_norm = %s", (bot["email"],), fetch_one=True)["n"] == 0
-    assert c.post("/api/public/lead-form", json={**body, "name": ""}).status_code == 400
-    assert c.post("/api/public/lead-form", json={**body, "email": "", "phone": ""}).status_code == 400
-    assert c.post("/api/public/lead-form", json={**body, "email": "not-an-email"}).status_code == 400
-    # rate limit per address
-    cm_webform._hits.clear()
-    codes = [c.post("/api/public/lead-form", json={**body, "name": ""}).status_code for _ in range(cm_webform.RATE_LIMIT + 1)]
-    assert codes[-1] == 429
-    cm_webform._hits.clear()
 
 
 def test_web_form_link_for_sales_users_only(client, people):
@@ -1158,6 +906,486 @@ def test_contract_documents_scope_pdf_and_explicit_send(client, people):
     r = c.post(f"{R}/contracts/{k['id']}/send-documents", json={"to": "c@example.com", "message": "As discussed", "documents": ["commercial", "scope", "agreement"]})
     assert r.status_code == 200 and wait_for(lambda: len(sent) == 1)
     assert sent[0][0] == "c@example.com" and len(sent[0][2]) == 3 and any("commercial-proposal" in n for n in sent[0][2])
-    assert any("Emailed to c@example.com" in a["body"] for a in c.get(f"{R}/leads/{lead['id']}/activities").json())
+    assert any("Emailed to c@example.com" in a["notes"] for a in c.get(f"{R}/activity", params={"client_id": k["client_id"]}).json())
     as_(c, people["sales_a"])
     assert c.post(f"{R}/contracts/{k['id']}/send-documents", json={"to": "c@example.com", "documents": ["scope"]}).status_code == 403
+
+
+# ---------------------------------------------------------------- the Sales CRM design (leads / accounts / opportunities / follow-ups / activity log / overview / import)
+
+def new_opp(c, who, **extra):
+    as_(c, who)
+    body = {"company_name": f"ZZCM Opp Co {uniq()}", "opp_name": None, "contact_person": "Mala", "deal_value": 100000, **extra}
+    r = c.post(f"{R}/opportunities", json=body)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+def test_leads_follow_the_sheet_columns_scope_and_duplicate_rules(client, people):
+    c = client
+    lead = new_lead(c, people["sales_a"], interested_in="Construction ERP", next_action="Call Monday", status="Contacted")
+    assert lead["code"].startswith("L-") and lead["status"] == "Contacted" and lead["source"] == "Referral" and lead["date_added"] == datetime.now().strftime("%Y-%m-%d") or lead["date_added"]
+    assert lead["bdr"] == "ZZCM sales-a" and lead["converted"] is False and lead["interested_in"] == "Construction ERP" and lead["location"] == "Chennai"
+    # dropdown values are enforced; Converted only comes from converting
+    as_(c, people["sales_a"])
+    assert c.post(f"{R}/leads", json={"company_name": "ZZCM x", "source": "Carrier pigeon"}).status_code == 400
+    assert c.post(f"{R}/leads", json={"company_name": "ZZCM x", "status": "Converted"}).status_code == 400
+    assert c.post(f"{R}/leads", json={"contact_person": "nobody"}).status_code == 200                       # a contact alone is enough
+    assert c.post(f"{R}/leads", json={}).status_code == 400
+    # same email or phone: warned, can be confirmed
+    dup = c.post(f"{R}/leads", json={"company_name": "ZZCM again", "email": lead["email"]})
+    assert dup.status_code == 409 and dup.json()["detail"]["duplicates"][0]["id"] == lead["id"] and dup.json()["detail"]["can_confirm"]
+    assert c.post(f"{R}/leads", json={"company_name": "ZZCM again", "email": lead["email"], "confirm_duplicate": True}).status_code == 200
+    # filters
+    assert any(l["id"] == lead["id"] for l in c.get(f"{R}/leads", params={"status": "Contacted"}).json())
+    assert not any(l["id"] == lead["id"] for l in c.get(f"{R}/leads", params={"status": "New"}).json())
+    assert any(l["id"] == lead["id"] for l in c.get(f"{R}/leads", params={"q": lead["company_name"][:15]}).json())
+    assert c.get(f"{R}/leads", params={"status": "bogus"}).status_code == 400
+    # edit own; another BDR can't see or change it; a manager can reassign
+    assert c.put(f"{R}/leads/{lead['id']}", json={"status": "Working", "next_action": "Send demo link"}).json()["status"] == "Working"
+    as_(c, people["sales_b"])
+    assert c.get(f"{R}/leads/{lead['id']}").status_code == 404 and not any(l["id"] == lead["id"] for l in c.get(f"{R}/leads").json())
+    as_(c, people["mgr"])
+    assert c.put(f"{R}/leads/{lead['id']}", json={"owner_id": people["sales_b"]["id"]}).json()["bdr"] == "ZZCM sales-b"
+    as_(c, people["sales_b"])
+    assert c.put(f"{R}/leads/{lead['id']}", json={"owner_id": people["sales_a"]["id"]}).status_code == 403    # a BDR can't hand leads around
+    as_(c, people["sales_view"])
+    assert any(l["id"] == lead["id"] for l in c.get(f"{R}/leads").json()) and c.put(f"{R}/leads/{lead['id']}", json={"status": "New"}).status_code == 403
+    as_(c, people["mgr"])
+    assert c.delete(f"{R}/leads/{lead['id']}").status_code == 200 and c.get(f"{R}/leads/{lead['id']}").status_code == 404
+
+
+def test_converting_a_lead_creates_the_account_and_opportunity(client, people):
+    c = client
+    lead = new_lead(c, people["sales_a"], status="Qualified", interested_in="Needs HRMS")
+    as_(c, people["sales_a"])
+    r = c.post(f"{R}/leads/{lead['id']}/convert", json={"deal_value": 120000, "expected_close_date": "2026-12-31"})
+    assert r.status_code == 200, r.text
+    out = r.json()
+    opp, acc = out["opportunity"], out["account_id"]
+    assert out["account_created"] and out["lead"]["status"] == "Converted" and out["lead"]["converted"] and out["lead"]["converted_opp_id"] == opp["id"]
+    assert opp["code"].startswith("O-") and opp["stage"] == "Discovery" and opp["probability"] == 10 and opp["deal_value"] == 120000.0 and opp["weighted_value"] == 12000.0
+    assert opp["client_id"] == acc and opp["bdr"] == "ZZCM sales-a" and opp["notes"] == "Needs HRMS" and opp["lead_source"] == "Referral"
+    account = c.get(f"{R}/clients/{acc}").json()
+    assert account["code"].startswith("A-") and account["name"] == lead["company_name"] and account["account_type"] == "Prospect" and account["location"] == "Chennai"
+    assert c.post(f"{R}/leads/{lead['id']}/convert", json={}).status_code == 409                              # once only
+    assert c.put(f"{R}/leads/{lead['id']}", json={"status": "New"}).status_code == 400                         # a converted lead is managed on its opportunity
+    assert c.delete(f"{R}/leads/{lead['id']}").status_code == 403
+    as_(c, people["mgr"])
+    assert c.delete(f"{R}/leads/{lead['id']}").status_code == 409
+    # an existing account (same name, any case) is reused; unqualified or company-less leads can't convert
+    again = new_lead(c, people["sales_a"], company_name=lead["company_name"].upper(), email=f"{TAG}-x-{uniq()}@example.com", phone="")
+    as_(c, people["sales_a"])
+    r2 = c.post(f"{R}/leads/{again['id']}/convert", json={"opp_name": "Second deal"})
+    assert r2.status_code == 200 and r2.json()["account_created"] is False and r2.json()["account_id"] == acc and r2.json()["opportunity"]["opp_name"] == "Second deal"
+    bad = new_lead(c, people["sales_a"], status="Unqualified")
+    assert c.post(f"{R}/leads/{bad['id']}/convert", json={}).status_code == 400
+    nameless = c.post(f"{R}/leads", json={"contact_person": "Someone", "phone": f"9{uniq().zfill(9)[-9:]}"}).json()
+    assert c.post(f"{R}/leads/{nameless['id']}/convert", json={}).status_code == 400
+    assert any("converted" in a["notes"] for a in c.get(f"{R}/activity", params={"client_id": acc}).json())
+
+
+def test_opportunity_stages_probability_and_closing_rules(client, people):
+    c = client
+    opp = new_opp(c, people["sales_a"], deal_value=200000)
+    assert opp["stage"] == "Discovery" and opp["weighted_value"] == 20000.0 and opp["opp_name"].startswith("ZZCM Opp Co")
+    as_(c, people["sales_a"])
+    for stage, prob in (("Demo Completed", 30), ("Pricing/POC Discussion", 50), ("Qualified", 70)):
+        r = c.put(f"{R}/opportunities/{opp['id']}", json={"stage": stage}).json()
+        assert r["stage"] == stage and r["probability"] == prob and r["weighted_value"] == 200000 * prob / 100
+    assert c.put(f"{R}/opportunities/{opp['id']}", json={"stage": "Nope"}).status_code == 400
+    assert c.post(f"{R}/opportunities", json={"company_name": "ZZCM x", "stage": "Closed Won", "deal_value": 5}).status_code == 400       # a deal is opened first
+    # Closed Won needs a value
+    blank = new_opp(c, people["sales_a"], deal_value=None)
+    assert blank["deal_value"] is None and blank["weighted_value"] == 0.0
+    as_(c, people["sales_a"])
+    assert c.put(f"{R}/opportunities/{blank['id']}", json={"stage": "Closed Won"}).status_code == 400
+    won = c.put(f"{R}/opportunities/{blank['id']}", json={"stage": "Closed Won", "deal_value": 50000}).json()
+    assert won["stage"] == "Closed Won" and won["probability"] == 100 and won["closed_at"] and c.get(f"{R}/clients/{won['client_id']}").json()["account_type"] == "Active Client"
+    lost = c.put(f"{R}/opportunities/{opp['id']}", json={"stage": "Closed Lost"}).json()
+    assert lost["probability"] == 0 and lost["weighted_value"] == 0.0
+    # reopening is a manager's call; another BDR can't touch it; negative values refused
+    assert c.put(f"{R}/opportunities/{opp['id']}", json={"stage": "Discovery"}).status_code == 403
+    as_(c, people["sales_b"])
+    assert c.get(f"{R}/opportunities/{opp['id']}").status_code == 404
+    as_(c, people["mgr"])
+    assert c.put(f"{R}/opportunities/{opp['id']}", json={"stage": "Discovery"}).json()["closed_at"] is None
+    assert c.put(f"{R}/opportunities/{opp['id']}", json={"deal_value": -5}).status_code == 400
+    assert {o["id"] for o in c.get(f"{R}/opportunities", params={"open_only": True}).json()} >= {opp["id"]} and not any(o["id"] == blank["id"] for o in c.get(f"{R}/opportunities", params={"open_only": True}).json())
+    assert [o["id"] for o in c.get(f"{R}/opportunities", params={"client_id": opp["client_id"]}).json()] == [opp["id"]]
+    assert c.delete(f"{R}/opportunities/{opp['id']}").status_code == 200
+
+
+def test_closed_won_deal_goes_through_after_sales_without_a_proposal(client, people):
+    c = client
+    opp = new_opp(c, people["sales_a"], deal_value=300000)
+    as_(c, people["sales_a"])
+    po = {"po_reference": "PO-DIRECT", "po_date": "2026-02-01", "start_date": "2026-02-01", "end_date": "2026-12-31", "contract_value": None}
+    assert c.post(f"{R}/opportunities/{opp['id']}/contract", json=po).status_code == 403                          # managers book POs
+    as_(c, people["mgr"])
+    assert c.post(f"{R}/opportunities/{opp['id']}/contract", json=po).status_code == 400                          # not Closed Won yet
+    assert c.put(f"{R}/opportunities/{opp['id']}", json={"stage": "Closed Won"}).status_code == 200
+    assert c.post(f"{R}/opportunities/{opp['id']}/contract", json={**po, "po_reference": " "}).status_code == 400
+    k = c.post(f"{R}/opportunities/{opp['id']}/contract", json=po)
+    assert k.status_code == 200, k.text
+    k = k.json()
+    assert k["status"] == "DRAFT" and k["contract_value"] == 300000.0 and k["opportunity_id"] == opp["id"] and k["proposal_id"] is None
+    assert c.post(f"{R}/opportunities/{opp['id']}/contract", json=po).status_code == 409
+    assert c.get(f"{R}/opportunities/{opp['id']}").json()["contract_id"] == k["id"]
+    assert c.put(f"{R}/opportunities/{opp['id']}", json={"stage": "Discovery"}).status_code == 400                  # a contract exists: can't reopen
+    eng = c.post(f"{R}/contracts/{k['id']}/engagement", json={})
+    assert eng.status_code == 200 and eng.json()["status"] == "ACTIVE"
+    as_(c, people["sales_a"])
+    assert c.get(f"{R}/contracts/{k['id']}").status_code == 200                                                    # the BDR sees the contract of their own deal
+    as_(c, people["sales_b"])
+    assert c.get(f"{R}/contracts/{k['id']}").status_code == 404
+    inv = posted_invoice(c, people, k, "2026-02", tax_pct=0, tds_pct=0, retention_pct=0, gross_amount=1000)
+    assert inv["status"] == "POSTED"
+    # booking a PO on an approved proposal also closes its opportunity as Won
+    _, prop, k2 = booked_contract(c, people)
+    opp2 = c.get(f"{R}/opportunities/{prop['opportunity_id']}").json() if as_(c, people["mgr"]) else None
+    assert opp2["stage"] == "Closed Won" and opp2["deal_value"] == 365000.0 and opp2["contract_id"] == k2["id"]
+
+
+def test_follow_up_cadence_steps_feed_the_activity_log(client, people):
+    c = client
+    opp = new_opp(c, people["sales_a"])
+    as_(c, people["sales_a"])
+    f = c.post(f"{R}/followups", json={"opportunity_id": opp["id"]})
+    assert f.status_code == 200, f.text
+    f = f.json()
+    assert f["code"].startswith("F-") and f["company_name"] == opp["account_name"] and f["opportunity_stage"] == "Discovery" and f["current_step"] == "Not started"
+    assert [s["label"] for s in f["steps"]] == ["Email 1", "Call 1", "Email 2", "Call 2", "Email 3", "Call 3", "Email 4", "Call 4", "Email 5", "Call 5"]
+    assert c.post(f"{R}/followups", json={"opportunity_id": opp["id"]}).status_code == 409                 # one cadence per opportunity
+    today = datetime.now().strftime("%Y-%m-%d")
+    r = c.put(f"{R}/followups/{f['id']}/steps/1", json={"date": today, "outcome": "Completed"})
+    assert r.status_code == 200 and r.json()["steps"][0] == {"step_no": 1, "label": "Email 1", "date": today, "outcome": "Completed"} and r.json()["current_step"] == "Email 1"
+    acts = [a for a in c.get(f"{R}/activity", params={"client_id": opp["client_id"]}).json() if a["followup_id"] == f["id"]]
+    assert len(acts) == 1 and acts[0]["activity_type"] == "Email" and acts[0]["outcome"] == "Completed" and acts[0]["log_date"] == today and acts[0]["from_cadence"]
+    # the call that follows; an outcome with no date means today
+    assert c.put(f"{R}/followups/{f['id']}/steps/2", json={"outcome": "No Response"}).json()["steps"][1]["date"] == today
+    acts = [a for a in c.get(f"{R}/activity", params={"client_id": opp["client_id"]}).json() if a["followup_id"] == f["id"]]
+    assert sorted(a["activity_type"] for a in acts) == ["Call", "Email"]
+    assert c.put(f"{R}/followups/{f['id']}/steps/3", json={"date": "2030-01-01", "outcome": "Pending"}).json()["current_step"] == "Call 1"      # a scheduled, not-yet-done touch is not "current"
+    assert len([a for a in c.get(f"{R}/activity", params={"client_id": opp["client_id"]}).json() if a["followup_id"] == f["id"]]) == 2          # Pending isn't an activity yet
+    # changing the outcome updates the log entry, clearing removes it
+    c.put(f"{R}/followups/{f['id']}/steps/1", json={"date": today, "outcome": "Rescheduled"})
+    assert [a["outcome"] for a in c.get(f"{R}/activity", params={"client_id": opp["client_id"], "activity_type": "Email"}).json() if a["followup_id"] == f["id"]] == ["Rescheduled"]
+    cleared = c.put(f"{R}/followups/{f['id']}/steps/1", json={}).json()
+    assert cleared["steps"][0]["date"] is None and cleared["steps"][0]["outcome"] is None
+    assert not [a for a in c.get(f"{R}/activity", params={"client_id": opp["client_id"], "activity_type": "Email"}).json() if a["followup_id"] == f["id"]]
+    # validation and the last step
+    assert c.put(f"{R}/followups/{f['id']}/steps/11", json={"date": today}).status_code == 400 and c.put(f"{R}/followups/{f['id']}/steps/1", json={"outcome": "Maybe"}).status_code == 400
+    assert c.put(f"{R}/followups/{f['id']}/steps/1", json={"date": "04/11/26x"}).status_code == 400
+    assert c.put(f"{R}/followups/{f['id']}/steps/10", json={"date": today, "outcome": "Completed"}).json()["current_step"] == "Sequence Complete"
+    assert c.put(f"{R}/followups/{f['id']}", json={"notes": "Wants a demo", "contact_person": "Mala R"}).json()["notes"] == "Wants a demo"
+    # the opportunity's last activity date moves forward
+    assert c.get(f"{R}/opportunities/{opp['id']}").json()["last_activity_date"] == today
+    # another BDR can't see or touch it; the cadence activity can't be edited as a plain row
+    as_(c, people["sales_b"])
+    assert c.get(f"{R}/followups/{f['id']}").status_code == 404 and c.put(f"{R}/followups/{f['id']}/steps/1", json={"date": today}).status_code == 404
+    as_(c, people["sales_a"])
+    row = [a for a in c.get(f"{R}/activity").json() if a["followup_id"] == f["id"]][0]
+    assert c.put(f"{R}/activity/{row['id']}", json={"notes": "x"}).status_code == 400 and c.delete(f"{R}/activity/{row['id']}").status_code == 400
+    assert c.delete(f"{R}/followups/{f['id']}").status_code == 200
+    assert not [a for a in c.get(f"{R}/activity").json() if a["followup_id"] == f["id"]] or all(a["followup_id"] is None for a in c.get(f"{R}/activity").json() if a["id"] == row["id"])
+
+
+def test_activity_log_and_overview_counts(client, people):
+    c = client
+    as_(c, people["sales_a"])
+    base = c.get(f"{R}/dashboard").json()["crm"]
+    acc = new_client(c, people["mgr"])
+    as_(c, people["sales_a"])
+    today = datetime.now().strftime("%Y-%m-%d")
+    mk = lambda **kw: c.post(f"{R}/activity", json={"company_name": acc["name"], **kw})   # noqa: E731
+    e = mk(activity_type="Email", outcome="Completed", notes="Intro mail")
+    assert e.status_code == 200 and e.json()["code"].startswith("AL-") and e.json()["client_id"] == acc["id"] and e.json()["log_date"] == today and e.json()["bdr"] == "ZZCM sales-a"
+    assert mk(activity_type="Call", outcome="Completed").status_code == 200 and mk(activity_type="Call", outcome="No Response").status_code == 200
+    assert mk(activity_type="WhatsApp", outcome="Completed").status_code == 200
+    old = mk(activity_type="Call", outcome="Completed", log_date="2020-01-01").json()
+    assert mk(activity_type="Fax").status_code == 400 and mk(outcome="Maybe").status_code == 400 and mk(log_date="31/02/2026").status_code == 400
+    assert c.post(f"{R}/activity", json={"activity_type": "Call"}).status_code == 400                       # which company?
+    ov = c.get(f"{R}/dashboard").json()["crm"]
+    assert ov["emails_today"] - base["emails_today"] == 1 and ov["calls_today"] - base["calls_today"] == 1       # only Completed Email / Call count; WhatsApp and No Response don't
+    mine = next(b for b in ov["bdr_activity_today"] if b["bdr"] == "ZZCM sales-a")
+    before = next((b for b in base["bdr_activity_today"] if b["bdr"] == "ZZCM sales-a"), {"emails": 0, "calls": 0})
+    assert mine["emails"] - before["emails"] == 1 and mine["calls"] - before["calls"] == 1
+    # filters
+    assert [a["id"] for a in c.get(f"{R}/activity", params={"date_to": "2020-12-31", "client_id": acc["id"]}).json()] == [old["id"]]
+    assert {a["activity_type"] for a in c.get(f"{R}/activity", params={"client_id": acc["id"], "activity_type": "Call"}).json()} == {"Call"}
+    # edit / delete own; others can't
+    assert c.put(f"{R}/activity/{old['id']}", json={"notes": "fixed", "outcome": "Skipped"}).json()["outcome"] == "Skipped"
+    as_(c, people["sales_b"])
+    assert c.put(f"{R}/activity/{old['id']}", json={"notes": "x"}).status_code == 404 and not any(a["id"] == old["id"] for a in c.get(f"{R}/activity").json())
+    as_(c, people["sales_a"])
+    assert c.delete(f"{R}/activity/{old['id']}").status_code == 200
+    # a manager can log for a BDR; a BDR can't log for someone else
+    as_(c, people["mgr"])
+    assert c.post(f"{R}/activity", json={"company_name": acc["name"], "activity_type": "Email", "owner_id": people["sales_b"]["id"]}).json()["bdr"] == "ZZCM sales-b"
+    as_(c, people["sales_a"])
+    assert c.post(f"{R}/activity", json={"company_name": acc["name"], "owner_id": people["sales_b"]["id"]}).status_code == 403
+
+
+def test_overview_numbers_follow_the_sheet(client, people):
+    c = client
+    as_(c, people["mgr"])
+    base = c.get(f"{R}/dashboard").json()["crm"]
+    base_mine = c.get(f"{R}/dashboard", params={"owner_id": people["sales_a"]["id"]}).json()["crm"]
+    assert [s["stage"] for s in base["pipeline_by_stage"]] == ["Discovery", "Demo Completed", "Pricing/POC Discussion", "Qualified", "Closed Won", "Closed Lost"]
+    assert [s["source"] for s in base["leads_by_source"]][:3] == ["Website", "Referral", "Cold Call"] and [s["status"] for s in base["lead_status"]] == ["New", "Contacted", "Working", "Qualified", "Unqualified", "Converted"]
+    o1 = new_opp(c, people["sales_a"], deal_value=100000)
+    o2 = new_opp(c, people["sales_a"], deal_value=50000, stage="Qualified")
+    o3 = new_opp(c, people["sales_a"], deal_value=30000)
+    as_(c, people["sales_a"])
+    assert c.put(f"{R}/opportunities/{o3['id']}", json={"stage": "Closed Won"}).status_code == 200
+    o4 = new_opp(c, people["sales_a"], deal_value=1000)
+    as_(c, people["sales_a"])
+    c.put(f"{R}/opportunities/{o4['id']}", json={"stage": "Closed Lost"})
+    new_lead(c, people["sales_a"], source="Cold Call", status="Working")
+    as_(c, people["mgr"])
+    ov = c.get(f"{R}/dashboard").json()["crm"]
+    assert ov["open_opportunities"] - base["open_opportunities"] == 2 and ov["pipeline_value"] - base["pipeline_value"] == 150000.0
+    assert ov["weighted_pipeline"] - base["weighted_pipeline"] == 100000 * 0.1 + 50000 * 0.7
+    assert ov["closed_won_value"] - base["closed_won_value"] == 30000.0 and ov["closed_won_count"] - base["closed_won_count"] == 1
+    assert ov["total_leads"] - base["total_leads"] == 1 and ov["total_accounts"] - base["total_accounts"] >= 4
+    by = {s["stage"]: s for s in ov["pipeline_by_stage"]}
+    assert by["Qualified"]["count"] - {s["stage"]: s for s in base["pipeline_by_stage"]}["Qualified"]["count"] == 1
+    # win rate = won / (won + lost), null (not 0) when nothing is closed
+    assert ov["win_rate_pct"] == round(ov["closed_won_count"] * 100 / (ov["closed_won_count"] + sum(s["count"] for s in ov["pipeline_by_stage"] if s["stage"] == "Closed Lost")), 1)
+    # one BDR's view (the sheet keeps a workbook per BDR) and scoping for a BDR
+    mine = c.get(f"{R}/dashboard", params={"owner_id": people["sales_a"]["id"]}).json()["crm"]
+    assert mine["owner_id"] == people["sales_a"]["id"] and mine["open_opportunities"] - base_mine["open_opportunities"] == 2 and mine["closed_won_count"] - base_mine["closed_won_count"] == 1
+    assert mine["pipeline_value"] - base_mine["pipeline_value"] == 150000.0
+    as_(c, people["sales_b"])
+    theirs = c.get(f"{R}/dashboard").json()["crm"]
+    assert theirs["open_opportunities"] == 0 and theirs["closed_won_value"] == 0 and theirs["win_rate_pct"] is None and theirs["pipeline_value"] == 0
+    # Accounts-only people see no CRM block
+    as_(c, people["acct"])
+    d = c.get(f"{R}/dashboard").json()
+    assert d["crm"] is None and d["aging"] is not None
+
+
+def test_alerts_for_due_follow_ups_and_stale_opportunities(client, people):
+    c = client
+    opp = new_opp(c, people["sales_a"])
+    as_(c, people["sales_a"])
+    f = c.post(f"{R}/followups", json={"opportunity_id": opp["id"]}).json()
+    c.put(f"{R}/followups/{f['id']}/steps/2", json={"date": "2020-01-01"})                                   # a call that was due long ago, no outcome
+    db(c, "UPDATE opportunities SET last_activity_date = '2020-01-01' WHERE id = %s", (opp["id"],))
+    alerts = c.get(f"{R}/alerts").json()
+    due = [a for a in alerts if a["kind"] == "FOLLOWUP" and a.get("followup_id") == f["id"]]
+    assert due and due[0]["severity"] == "high" and "Call 1" in due[0]["message"] and "overdue" in due[0]["message"]
+    assert any(a["kind"] == "OPPORTUNITY_STALE" and a.get("opportunity_id") == opp["id"] for a in alerts)
+    c.put(f"{R}/followups/{f['id']}/steps/2", json={"date": "2020-01-01", "outcome": "Completed"})            # done: the call is no longer due, and the next touch was scheduled automatically (in the past here)
+    due2 = [a for a in c.get(f"{R}/alerts").json() if a["kind"] == "FOLLOWUP" and a.get("followup_id") == f["id"]]
+    assert len(due2) == 1 and "Email 2" in due2[0]["message"]
+    as_(c, people["sales_b"])
+    assert not any(a.get("opportunity_id") == opp["id"] for a in c.get(f"{R}/alerts").json())
+
+
+def test_follow_up_reminder_digest_lists_due_touches_once_a_day(client, people):
+    from app.services import cm_reminders
+    c = client
+    sent = []
+    cm_reminders._send = lambda to, subject, html: sent.append((to, subject, html))
+    opp = new_opp(c, people["sales_a"])
+    as_(c, people["sales_a"])
+    f = c.post(f"{R}/followups", json={"opportunity_id": opp["id"]}).json()
+    c.put(f"{R}/followups/{f['id']}/steps/1", json={"date": "2020-01-01"})
+    monday = datetime(2030, 1, 7, 9, 30, tzinfo=timezone.utc).astimezone(cm_reminders.APP_TIMEZONE).replace(hour=9, minute=30)
+    assert monday.weekday() == 0
+    n = c.portal.call(lambda: cm_reminders.send_followup_digests(monday))
+    mine = [m for m in sent if m[0] == people["sales_a"]["email"]]
+    assert n >= 1 and len(mine) == 1 and "Follow-ups due" in mine[0][1] and "Email 1" in mine[0][2] and opp["account_name"] in mine[0][2]
+    c.portal.call(lambda: cm_reminders.send_followup_digests(monday))
+    assert len([m for m in sent if m[0] == people["sales_a"]["email"]]) == 1                      # same day: not again
+    assert c.portal.call(lambda: cm_reminders.send_followup_digests(monday.replace(day=monday.day + 5))) == 0      # weekends are quiet
+    assert c.portal.call(lambda: cm_reminders.send_followup_digests(monday.replace(hour=6))) == 0                   # before the reminder time
+    db(c, "DELETE FROM reminder_log WHERE kind IN ('cm_followup', 'cm_receivables') AND date = %s", (monday.strftime("%Y-%m-%d"),))
+
+
+def test_public_web_form_creates_unassigned_website_leads_with_guards(client, people):
+    from app.services import cm_webform
+    c = client
+    cm_webform._hits.clear()
+    page = c.get("/api/public/lead-form")
+    assert page.status_code == 200 and "text/html" in page.headers["content-type"] and "name=website" in page.text
+    u = uniq()
+    body = {"name": "Web Visitor", "company": f"ZZCM Web Co {u}", "email": f"{TAG}-web-{u}@example.com", "phone": "", "message": "Need a portal built", "website": ""}
+    c.cookies.clear()
+    assert c.post("/api/public/lead-form", json=body).status_code == 200
+    row = db(c, "SELECT * FROM leads WHERE email_norm = %s", (body["email"],), fetch_one=True)
+    assert row and row["source"] == "Website" and row["lead_status"] == "New" and row["owner_id"] is None and row["code"].startswith("L-") and row["interested_in"] == "Need a portal built"
+    act = db(c, "SELECT bdr_label, notes FROM activity_log WHERE lead_id = %s ORDER BY id", (row["id"],), fetch_all=True)
+    assert any("Need a portal built" in a["notes"] for a in act) and act[0]["bdr_label"] == "Web form"
+    as_(c, people["mgr"])
+    assert any(l["id"] == row["id"] for l in c.get(f"{R}/leads").json())
+    as_(c, people["sales_b"])
+    assert not any(l["id"] == row["id"] for l in c.get(f"{R}/leads").json())
+    c.cookies.clear()
+    assert c.post("/api/public/lead-form", json={**body, "message": "Following up"}).status_code == 200
+    assert db(c, "SELECT COUNT(*) AS n FROM leads WHERE email_norm = %s", (body["email"],), fetch_one=True)["n"] == 1
+    assert any("Following up" in a["notes"] for a in db(c, "SELECT notes FROM activity_log WHERE lead_id = %s", (row["id"],), fetch_all=True))
+    bot = {**body, "email": f"{TAG}-bot-{u}@example.com", "website": "http://spam"}
+    assert c.post("/api/public/lead-form", json=bot).status_code == 200
+    assert db(c, "SELECT COUNT(*) AS n FROM leads WHERE email_norm = %s", (bot["email"],), fetch_one=True)["n"] == 0
+    assert c.post("/api/public/lead-form", json={**body, "name": ""}).status_code == 400
+    assert c.post("/api/public/lead-form", json={**body, "email": "", "phone": ""}).status_code == 400
+    assert c.post("/api/public/lead-form", json={**body, "email": "not-an-email"}).status_code == 400
+    cm_webform._hits.clear()
+    codes = [c.post("/api/public/lead-form", json={**body, "name": ""}).status_code for _ in range(cm_webform.RATE_LIMIT + 1)]
+    assert codes[-1] == 429
+    cm_webform._hits.clear()
+
+
+def _workbook(rows_by_sheet: dict) -> bytes:
+    from openpyxl import Workbook
+    wb = Workbook()
+    wb.remove(wb.active)
+    for name, rows in rows_by_sheet.items():
+        ws = wb.create_sheet(name)
+        for r in rows:
+            ws.append(r)
+    buf = io.BytesIO(); wb.save(buf)
+    return buf.getvalue()
+
+def test_import_the_sales_crm_workbook_is_previewable_idempotent_and_tolerant(client, people):
+    c = client
+    u = uniq()
+    co1, co2, co3 = f"ZZCM Imp Alpha {u}", f"ZZCM Imp Beta {u}", f"ZZCM Imp Gamma {u}"
+    wb = _workbook({
+        "Lists": [["Lead Source", "Lead Status"], ["Website", "New"]],
+        "Overview": [["SALES CRM — OVERVIEW DASHBOARD"], ["Total Leads", 74]],
+        "Accounts": [["ACCOUNTS (Client Companies)"], ["One row per company."], ["Account ID", "Company Name", "Industry", "Location", "Website", "Primary Contact", "Phone", "Email", "Account Type", "Account Owner", "Created Date", "Notes"],
+                     ["A-001", co1, "Construction", "Coimbatore", "https://a.example", "Ganesh", "9344900018", "g@example.com", "Prospect", "Sales", "02-09-2026", "first note"],
+                     ["A-002", co1, "Construction", "Coimbatore", None, None, None, None, "Prospect", "Sales", "02-09-2026", None],
+                     ["A-003", co2, "Underwater Basket Weaving", "Chennai", None, None, "7845746355", None, "Active Client", "Sales Team", "2026-09-03", None]],
+        "Leads": [["LEADS"], ["Every new prospect starts here."], ["Lead ID", "Company Name", "Contact Person", "Phone", "Email", "Location", "Lead Source", "Lead Status", "Date Added", "BDR Name", "Converted to Opportunity?", "Interested In / Notes", "Next Action"],
+                  ["L-001", co1, "Ganesh", "9344900018", "g@example.com", "Sivaganga", "Cold Call", "Qualified ", "2026-08-01", "ZZCM sales-a", "Yes", "ERP", "Call Mon"],
+                  ["L-002", co3, None, "98765 43210", None, "Chennai", "Smoke signal", "Whatever", "25-Aug-2026", "Nobody Known", None, None, None],
+                  ["L-003", co3, None, "98765 43210", None, "Chennai", "Cold Call", "Contacted", "4-11-2026", "Nobody Known", None, None, None],
+                  ["L-004", None, None, None, None, None, "Cold Call", "New", None, None, None, None, None]],
+        "Opportunities": [["OPPORTUNITIES"], ["A lead becomes an Opportunity ..."], ["Opportunity ID", "Company Name", "Opp Name", "Contact Person", "Stage", "Deal Value (INR)", "Probability %", "Weighted Value (INR)", "Expected Close Date",
+                                                                                   "Lead Source", "BDR Name", "Created Date", "Last Activity Date", "Next Action", "Notes"],
+                          ["O-001", co1, f"{co1} - Aug 26", "Ganesh", "Demo Completed", "1,19,988", "30%", 0, "2026-08-27", "Cold Call", "ZZCM sales-a", "2026-07-27", "2026-08-18", "2nd demo", "(Done)"],
+                          ["O-002", co3, f"{co3} - Aug 26", "—", "Pricing/POC Discussion", "core", None, None, None, "Cold Call", "ZZCM sales-a", None, None, None, None]],
+        "Follow-ups": [["FOLLOW-UP CADENCE TRACKER"], ["Standard cadence ..."], ["Company / Contact", None, None, None, None, "Email 1", None, "Call 1", None, "Email 2", None, "Call 2", None, "Email 3", None, "Call 3", None, "Email 4", None, "Call 4", None, "Email 5", None, "Call 5", None, "Overall"],
+                       ["Follow-up ID", "Company Name", "Contact Person", "BDR Name", "Opportunity Stage (ref)"] + ["Date", "Outcome"] * 10 + ["Current Step", "Notes"],
+                       ["F-001", co1, "Ganesh", "ZZCM sales-a", None, "2026-08-25", "Completed", "2026-08-27", "Completed", "2026-09-17", "No Response", None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, "Call 1", "busy"]],
+        "Activity Log": [["Every email and call gets its own row here."], ["Log ID", "Date", "BDR Name", "Company Name", "Activity Type", "Outcome", "Notes"],
+                         ["AL-001", "25-Aug-2026", "ZZCM sales-a", co1, "Email", "Completed", "Email 1 — cadence step"],
+                         ["AL-002", "27-Aug-2026", "ZZCM sales-a", co1, "Call", "Completed", None],
+                         ["AL-003", "27-Aug-2026", "ZZCM sales-a", co1, "Call", "Completed", None],
+                         ["AL-004", "not a date", "ZZCM sales-a", co1, "Call", "Completed", None]],
+    })
+    as_(c, people["mgr"])
+    def post(apply, **params):
+        return c.post(f"{R}/import", params={"apply": apply, **params}, files={"file": ("Sales_CRM.xlsx", wb, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+    # preview: reports what would happen, writes nothing
+    pre = post(False)
+    assert pre.status_code == 200, pre.text
+    by = {s["sheet"]: s for s in pre.json()["sheets"]}
+    assert pre.json()["applied"] is False and by["Lists"]["kind"] is None and by["Overview"]["kind"] is None
+    assert (by["Accounts"]["kind"], by["Accounts"]["rows"], by["Accounts"]["created"], by["Accounts"]["skipped"]) == ("accounts", 3, 2, 1)         # the repeated company counts once
+    assert (by["Leads"]["created"], by["Leads"]["skipped"]) == (2, 2) and by["Leads"]["errors"][0]["row"] == 4                                   # one duplicate (same company + phone), one empty row
+    assert db(c, "SELECT COUNT(*) AS n FROM clients WHERE name LIKE %s", (f"%{u}%",), fetch_one=True)["n"] == 0
+    # apply
+    done = post(True).json()
+    by = {s["sheet"]: s for s in done["sheets"]}
+    assert by["Accounts"]["created"] == 2 and by["Opportunities"]["created"] == 2 and by["Follow-ups"]["created"] == 1 and by["Activity Log"]["created"] == 2 and by["Activity Log"]["skipped"] == 2
+    acc = db(c, "SELECT * FROM clients WHERE name = %s", (co1,), fetch_one=True)
+    assert acc["code"].startswith("A-") and acc["industry"] == "Construction" and acc["location"] == "Coimbatore" and acc["created_at"].startswith("2026-09-02") and acc["owner_label"] == "Sales"
+    assert db(c, "SELECT industry, account_type FROM clients WHERE name = %s", (co2,), fetch_one=True) == {"industry": "Other", "account_type": "Active Client"}     # unknown industry -> Other
+    leads = db(c, "SELECT * FROM leads WHERE company_name LIKE %s ORDER BY id", (f"%{u}%",), fetch_all=True)
+    assert len(leads) == 2
+    l1, l2 = leads
+    assert (l1["lead_status"], l1["source"], l1["date_added"], l1["owner_id"], l1["interested_in"]) == ("Qualified", "Cold Call", "2026-08-01", people["sales_a"]["id"], "ERP")      # "Qualified " trimmed, BDR matched to the user
+    assert (l2["lead_status"], l2["source"], l2["date_added"], l2["owner_id"], l2["bdr_label"]) == ("New", "Other", "2026-08-25", None, "Nobody Known")                    # bad dropdown values fall back, unknown BDR kept as text
+    opps = {o["opp_name"]: o for o in db(c, "SELECT * FROM opportunities WHERE opp_name LIKE %s", (f"%{u}%",), fetch_all=True)}
+    o1 = opps[f"{co1} - Aug 26"]
+    assert float(o1["deal_value"]) == 119988.0 and o1["stage"] == "Demo Completed" and o1["expected_close_date"] == "2026-08-27" and o1["created_date"] == "2026-07-27" and o1["owner_id"] == people["sales_a"]["id"]
+    assert opps[f"{co3} - Aug 26"]["deal_value"] is None                                                                                  # "core" isn't a number
+    fu = db(c, "SELECT * FROM followups WHERE company_name = %s", (co1,), fetch_one=True)
+    steps = {r["step_no"]: r for r in db(c, "SELECT * FROM followup_steps WHERE followup_id = %s", (fu["id"],), fetch_all=True)}
+    assert fu["owner_id"] == people["sales_a"]["id"] and fu["opportunity_id"] == o1["id"] and (steps[1]["step_date"], steps[1]["outcome"]) == ("2026-08-25", "Completed") and steps[3]["outcome"] == "No Response" and len(steps) == 3
+    acts = db(c, "SELECT * FROM activity_log WHERE company_name = %s ORDER BY id", (co1,), fetch_all=True)
+    assert [(a["log_date"], a["activity_type"]) for a in acts] == [("2026-08-25", "Email"), ("2026-08-27", "Call")] and acts[0]["client_id"] == acc["id"]
+    # re-running changes nothing; a selected sheet only
+    again = {s["sheet"]: s for s in post(True).json()["sheets"]}
+    assert all(again[n]["created"] == 0 for n in ("Accounts", "Leads", "Opportunities", "Follow-ups", "Activity Log"))
+    one = {s["sheet"]: s for s in post(False, sheets="Leads").json()["sheets"]}
+    assert one["Leads"]["rows"] == 4 and one["Accounts"]["note"] == "Not selected"
+    # a BDR sees what was assigned to them; the manager imported the rest
+    as_(c, people["sales_a"])
+    assert any(o["opp_name"] == f"{co1} - Aug 26" for o in c.get(f"{R}/opportunities").json())
+    assert c.post(f"{R}/import", files={"file": ("x.xlsx", wb, "application/octet-stream")}).status_code == 403                   # managers only
+    as_(c, people["mgr"])
+    assert c.post(f"{R}/import", files={"file": ("x.txt", b"hello", "text/plain")}).status_code == 400
+    assert c.post(f"{R}/import", files={"file": ("x.xlsx", b"not a workbook", "application/octet-stream")}).status_code == 400
+    # one sheet as CSV works too
+    csv_bytes = ("Lead ID,Company Name,Contact Person,Phone,Email,Location,Lead Source,Lead Status,Date Added,BDR Name,Converted to Opportunity?,Interested In / Notes,Next Action\n"
+                 f"L-9,ZZCM Csv Co {u},,9000000099,,Madurai,Referral,Contacted,2026-10-01,ZZCM sales-b,,,\n").encode()
+    r = c.post(f"{R}/import", params={"apply": True}, files={"file": ("leads.csv", csv_bytes, "text/csv")})
+    assert r.status_code == 200 and r.json()["sheets"][0]["created"] == 1
+
+
+def test_crm_exports_use_the_sheet_headings_and_round_trip(client, people):
+    c = client
+    lead = new_lead(c, people["sales_a"], company_name=f"=SUM(1+1) ZZCM {uniq()}", status="Working")
+    opp = new_opp(c, people["sales_a"])
+    as_(c, people["sales_a"])
+    f = c.post(f"{R}/followups", json={"opportunity_id": opp["id"]}).json()
+    c.put(f"{R}/followups/{f['id']}/steps/1", json={"date": "2026-08-25", "outcome": "Completed"})
+    head = lambda name: c.get(f"{R}/reports/{name}.csv").content.decode("utf-8-sig").splitlines()[0]   # noqa: E731
+    assert head("leads") == "Lead ID,Company Name,Contact Person,Phone,Email,Location,Lead Source,Lead Status,Date Added,BDR Name,Converted to Opportunity?,Interested In / Notes,Next Action"
+    assert head("accounts") == "Account ID,Company Name,Industry,Location,Website,Primary Contact,Phone,Email,Account Type,Account Owner,Created Date,Notes"
+    assert head("opportunities").startswith("Opportunity ID,Company Name,Opp Name,Contact Person,Stage,Deal Value (INR),Probability %,Weighted Value (INR),Expected Close Date")
+    assert head("followups").startswith("Follow-up ID,Company Name,Contact Person,BDR Name,Opportunity Stage (ref),Email 1 Date,Email 1 Outcome,Call 1 Date") and head("followups").endswith("Current Step,Notes")
+    assert head("activity") == "Log ID,Date,BDR Name,Company Name,Activity Type,Outcome,Notes"
+    body = c.get(f"{R}/reports/leads.csv").content.decode("utf-8-sig")
+    assert f"'{lead['company_name']}" in body                                                              # formula-looking text is defused
+    assert "Working" in body and c.get(f"{R}/reports/followups.csv").content.decode("utf-8-sig").count("2026-08-25,Completed") >= 1
+    # BDRs export only their own rows; Accounts people can't export CRM data but can export contracts / accounts
+    as_(c, people["sales_b"])
+    assert lead["company_name"] not in c.get(f"{R}/reports/leads.csv").content.decode("utf-8-sig")
+    as_(c, people["acct"])
+    assert c.get(f"{R}/reports/leads.csv").status_code == 403 and c.get(f"{R}/reports/activity.csv").status_code == 403 and c.get(f"{R}/reports/accounts.csv").status_code == 200
+    # exported leads import again without creating duplicates
+    as_(c, people["mgr"])
+    csv_bytes = c.get(f"{R}/reports/leads.csv").content
+    r = c.post(f"{R}/import", params={"apply": True}, files={"file": ("leads.csv", csv_bytes, "text/csv")}).json()["sheets"][0]
+    assert r["kind"] == "leads" and r["created"] == 0 and r["skipped"] >= 1
+
+
+def test_cadence_automation_schedules_the_next_touch_and_conversion_starts_the_cadence(client, people):
+    from app.services.cm_crm import next_workday
+    from datetime import date as _date, timedelta as _td
+    c = client
+    # converting a lead opens the cadence with Email 1 due today (next working day)
+    lead = new_lead(c, people["sales_a"], status="Qualified")
+    as_(c, people["sales_a"])
+    out = c.post(f"{R}/leads/{lead['id']}/convert", json={}).json()
+    fid = out["followup_id"]
+    assert fid
+    fu = c.get(f"{R}/followups/{fid}").json()
+    today = _date.today()
+    assert fu["opportunity_id"] == out["opportunity"]["id"] and fu["steps"][0]["outcome"] == "Pending" and fu["steps"][0]["date"] == next_workday(today).isoformat() and fu["current_step"].startswith("Email 1")
+    assert c.post(f"{R}/leads/{new_lead(c, people['sales_a'])['id']}/convert", json={"start_cadence": False}).json()["followup_id"] is None
+    # doing Email 1 schedules Call 1 two days later, Call 1 schedules Email 2 three days after that, never on a weekend
+    d1 = "2026-11-02"                                                                                 # a Monday
+    r = c.put(f"{R}/followups/{fid}/steps/1", json={"date": d1, "outcome": "Completed"}).json()
+    assert (r["steps"][1]["date"], r["steps"][1]["outcome"]) == ("2026-11-04", "Pending")
+    r = c.put(f"{R}/followups/{fid}/steps/2", json={"date": "2026-11-04", "outcome": "No Response"}).json()
+    assert (r["steps"][2]["date"], r["steps"][2]["outcome"]) == ("2026-11-09", "Pending")              # Wed + 3 = Saturday -> Monday
+    assert next_workday(_date(2026, 11, 7)) == _date(2026, 11, 9) and next_workday(_date(2026, 11, 6)) == _date(2026, 11, 6)
+    # an already scheduled / filled next touch is left alone; Pending and Rescheduled don't schedule anything
+    c.put(f"{R}/followups/{fid}/steps/4", json={"date": "2026-12-01"})
+    r = c.put(f"{R}/followups/{fid}/steps/3", json={"date": "2026-11-09", "outcome": "Completed"}).json()
+    assert r["steps"][3]["date"] == "2026-12-01"
+    r = c.put(f"{R}/followups/{fid}/steps/5", json={"date": "2026-11-20", "outcome": "Rescheduled"}).json()
+    assert r["steps"][5]["date"] is None
+    # the dropdown lists endpoint mirrors the sheet's Lists tab
+    ls = c.get(f"{R}/lists").json()
+    assert ls["lead_statuses"] == ["New", "Contacted", "Working", "Qualified", "Unqualified", "Converted"] and ls["cadence"][0] == "Email 1" and ls["opportunity_stages"][0] == {"stage": "Discovery", "probability": 10}
+    ov = c.get(f"{R}/dashboard").json()["crm"]
+    assert len(ov["activity_14d"]) == 14 and ov["activity_14d"][-1]["date"] == _date.today().isoformat() and ov["due_followups"] >= 0

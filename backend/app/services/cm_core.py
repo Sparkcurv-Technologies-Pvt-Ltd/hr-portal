@@ -21,11 +21,18 @@ from fastapi import HTTPException
 from app.core.permissions import effective_module_permissions
 from app.db import execute_query
 
-LEAD_SOURCES = ("REFERRAL", "WEBSITE", "EVENT", "COLD_CALL", "TENDER_PORTAL", "PARTNER", "OTHER")
-LEAD_STAGES = ("NEW", "CONTACTED", "QUALIFIED", "TENDER", "PROPOSAL", "WON", "LOST")
-OPEN_LEAD_STAGES = ("NEW", "CONTACTED", "QUALIFIED", "TENDER", "PROPOSAL")
-ACTIVITY_KINDS = ("CALL", "EMAIL", "MEETING", "NOTE", "STAGE_CHANGE")
-TENDER_STATUSES = ("OPEN", "SUBMITTED", "WON", "LOST", "CANCELLED")
+# The Sales CRM sheet's dropdown lists ("Lists" sheet)
+LEAD_SOURCES = ("Website", "Referral", "Cold Call", "WhatsApp Inquiry", "Social Media", "Trade Show / Exhibition", "Walk-in", "Other")
+LEAD_STATUSES = ("New", "Contacted", "Working", "Qualified", "Unqualified", "Converted")
+INDUSTRIES = ("Construction", "Real Estate", "Architecture", "Interior Design", "Finance", "Manufacturing", "Other")
+OPP_STAGES = ("Discovery", "Demo Completed", "Pricing/POC Discussion", "Qualified", "Closed Won", "Closed Lost")
+OPEN_OPP_STAGES = OPP_STAGES[:4]
+STAGE_PROBABILITY = {"Discovery": 10, "Demo Completed": 30, "Pricing/POC Discussion": 50, "Qualified": 70, "Closed Won": 100, "Closed Lost": 0}
+ACCOUNT_TYPES = ("Prospect", "Active Client", "Churned", "Partner")
+FOLLOWUP_OUTCOMES = ("Pending", "Completed", "No Response", "Skipped", "Rescheduled")
+ACTIVITY_TYPES = ("Email", "Call", "WhatsApp", "Note")
+CADENCE_GAP_DAYS = (2, 3, 2, 3, 2, 3, 2, 3, 2)     # automation: when a touch is done, the next one is scheduled this many days later (weekends skipped)
+CADENCE = ("Email 1", "Call 1", "Email 2", "Call 2", "Email 3", "Call 3", "Email 4", "Call 4", "Email 5", "Call 5")   # standard cadence per opportunity
 PROPOSAL_STATUSES = ("DRAFT", "SENT", "ACCEPTED", "REJECTED")
 REVIEW_STATUSES = ("PENDING", "CHANGES_ASKED", "APPROVED")
 CONTRACT_STATUSES = ("DRAFT", "ACTIVE", "COMPLETED", "TERMINATED")
@@ -179,9 +186,16 @@ async def client_or_404(client_id: int) -> dict:
         raise HTTPException(status_code=404, detail="Client not found")
     return c
 
-async def log_activity(lead_id: int, kind: str, body: str, ctx: Optional[Ctx] = None, by_name: str = "System") -> None:
-    """Every stage change and contact goes into the lead's activity log: who, when, and a note."""
-    await execute_query(
-        "INSERT INTO lead_activities (lead_id, kind, body, by_user_id, by_user_name, at) VALUES (%s, %s, %s, %s, %s, %s)",
-        (lead_id, kind, (body or "")[:4000], ctx.uid if ctx else None, ctx.name if ctx else by_name, now_iso())
-    )
+async def log_activity(company_name: str, notes: str, *, activity_type: str = "Note", outcome: Optional[str] = "Completed", ctx: Optional[Ctx] = None, by_name: str = "System",
+                       owner_id: Optional[int] = None, bdr_label: Optional[str] = None, client_id: Optional[int] = None, lead_id: Optional[int] = None,
+                       opportunity_id: Optional[int] = None, followup_id: Optional[int] = None, followup_step: Optional[int] = None, log_date: Optional[str] = None) -> int:
+    """One row in the activity log (the sheet's "Activity Log"): who did what, when, with which company and what came of it."""
+    who = owner_id if owner_id is not None else (ctx.uid if ctx and bdr_label is None else None)
+    label = bdr_label or (ctx.name if ctx else by_name)
+    aid = await execute_query(
+        """INSERT INTO activity_log (code, log_date, owner_id, bdr_label, client_id, lead_id, opportunity_id, followup_id, followup_step, company_name, activity_type, outcome, notes, created_by, created_at)
+           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+        (temp_code(), log_date or today().isoformat(), who, label, client_id, lead_id, opportunity_id, followup_id, followup_step, (company_name or "—")[:255], activity_type, outcome,
+         (notes or "")[:4000], ctx.uid if ctx else None, now_iso()), last_id=True)
+    await execute_query("UPDATE activity_log SET code = %s WHERE id = %s", (format_code("AL", aid), aid))
+    return aid

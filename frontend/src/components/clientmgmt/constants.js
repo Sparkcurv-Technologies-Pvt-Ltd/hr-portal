@@ -1,19 +1,20 @@
 import { format } from "date-fns";
 
-export const STAGES = [
-  { key: "NEW", label: "New", tone: "tone-blue" },
-  { key: "CONTACTED", label: "Contacted", tone: "tone-violet" },
-  { key: "QUALIFIED", label: "Qualified", tone: "tone-teal" },
-  { key: "TENDER", label: "Tender", tone: "tone-amber" },
-  { key: "PROPOSAL", label: "Proposal", tone: "tone-blue" },
-  { key: "WON", label: "Won", tone: "tone-green" },
-  { key: "LOST", label: "Lost", tone: "tone-red" },
-];
-export const STAGE = Object.fromEntries(STAGES.map(s => [s.key, s]));
-export const SOURCES = [["REFERRAL", "Referral"], ["WEBSITE", "Website"], ["EVENT", "Event"], ["COLD_CALL", "Cold call"], ["TENDER_PORTAL", "Tender portal"], ["PARTNER", "Partner"], ["OTHER", "Other"]];
-export const SOURCE_LABEL = Object.fromEntries(SOURCES);
-export const KINDS = [["CALL", "Call"], ["EMAIL", "Email"], ["MEETING", "Meeting"], ["NOTE", "Note"]];
+// The Sales CRM sheet's dropdown lists ("Lists" sheet)
+export const LEAD_STATUSES = ["New", "Contacted", "Working", "Qualified", "Unqualified", "Converted"];
+export const LEAD_SOURCES = ["Website", "Referral", "Cold Call", "WhatsApp Inquiry", "Social Media", "Trade Show / Exhibition", "Walk-in", "Other"];
+export const INDUSTRIES = ["Construction", "Real Estate", "Architecture", "Interior Design", "Finance", "Manufacturing", "Other"];
+export const OPP_STAGES = ["Discovery", "Demo Completed", "Pricing/POC Discussion", "Qualified", "Closed Won", "Closed Lost"];
+export const STAGE_PROBABILITY = { "Discovery": 10, "Demo Completed": 30, "Pricing/POC Discussion": 50, "Qualified": 70, "Closed Won": 100, "Closed Lost": 0 };
+export const ACCOUNT_TYPES = ["Prospect", "Active Client", "Churned", "Partner"];
+export const OUTCOMES = ["Pending", "Completed", "No Response", "Skipped", "Rescheduled"];
+export const ACTIVITY_TYPES = ["Email", "Call", "WhatsApp", "Note"];
+
 export const TONES = {
+  lead: { New: "tone-blue", Contacted: "tone-violet", Working: "tone-amber", Qualified: "tone-teal", Unqualified: "tone-red", Converted: "tone-green" },
+  stage: { "Discovery": "tone-blue", "Demo Completed": "tone-violet", "Pricing/POC Discussion": "tone-amber", "Qualified": "tone-teal", "Closed Won": "tone-green", "Closed Lost": "tone-red" },
+  account: { Prospect: "tone-blue", "Active Client": "tone-green", Churned: "tone-red", Partner: "tone-violet" },
+  outcome: { Pending: "tone-amber", Completed: "tone-green", "No Response": "tone-red", Skipped: "tone-teal", Rescheduled: "tone-violet" },
   proposal: { DRAFT: "tone-teal", SENT: "tone-blue", ACCEPTED: "tone-green", REJECTED: "tone-red" },
   review: { PENDING: "tone-amber", CHANGES_ASKED: "tone-red", APPROVED: "tone-green" },
   contract: { DRAFT: "tone-amber", ACTIVE: "tone-green", COMPLETED: "tone-blue", TERMINATED: "tone-red" },
@@ -22,7 +23,9 @@ export const TONES = {
   advance: { OPEN: "tone-blue", PARTLY_ADJUSTED: "tone-amber", ADJUSTED: "tone-green", CANCELLED: "tone-red" },
 };
 export const selectClass = "w-full h-10 rounded-xl border px-3 text-sm bg-white";
+export const miniSelect = "h-8 rounded-lg border px-1.5 text-xs bg-white max-w-full";
 export const money = (n) => (n == null ? "—" : new Intl.NumberFormat("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n));
+export const moneyShort = (n) => (n == null ? "—" : new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(n));
 export const day = (iso) => (iso ? format(new Date(iso.length === 10 ? iso + "T00:00:00" : iso), "d MMM yyyy") : "—");
 export const when = (iso) => (iso ? format(new Date(iso), "d MMM yyyy, h:mm a") : "—");
 export const todayStr = () => format(new Date(), "yyyy-MM-dd");

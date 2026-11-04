@@ -8,7 +8,7 @@ from fastapi import HTTPException
 
 from app.db import execute_query
 from app.services import cm_core as core
-from app.services.cm_sales import find_lead_duplicates
+from app.services.cm_crm import _insert_lead, find_lead_duplicates
 
 RATE_LIMIT = 5              # submissions ...
 RATE_WINDOW_SECONDS = 600   # ... per address in this many seconds
@@ -51,16 +51,12 @@ async def submit(data, who: str) -> dict:
     note = f"Web form: {name}" + (f" ({company})" if company else "") + (f" — {message}" if message else "")
     dups = await find_lead_duplicates(email, phone)
     if dups:                                    # known contact: add to their lead instead of creating a second one
-        await core.log_activity(dups[0]["id"], "NOTE", note, by_name="Web form")
+        await core.log_activity(company or name, note, activity_type="Note", outcome=None, by_name="Web form", lead_id=dups[0]["id"])
         await execute_query("UPDATE leads SET updated_at = %s WHERE id = %s", (core.now_iso(), dups[0]["id"]))
         return {"message": THANKS}
-    now = core.now_iso()
-    lid = await execute_query(
-        """INSERT INTO leads (code, source, company_name, contact_name, phone, email, phone_norm, email_norm, owner_id, stage, created_at, updated_at)
-           VALUES (%s, 'WEBSITE', %s, %s, %s, %s, %s, %s, NULL, 'NEW', %s, %s)""",
-        (core.temp_code(), company or None, name, phone or None, email or None, core.norm_phone(phone), core.norm_email(email), now, now), last_id=True)
-    await execute_query("UPDATE leads SET code = %s WHERE id = %s", (core.format_code("LEAD", lid), lid))
-    await core.log_activity(lid, "STAGE_CHANGE", "Lead created from the web form (NEW)" + (f" — {message}" if message else ""), by_name="Web form")
+    fields = {"source": "Website", "lead_status": "New", "company_name": company or None, "contact_name": name, "phone": phone or None, "email": email or None, "interested_in": message or None}
+    lid = await _insert_lead(fields, None, "Web form", None)
+    await core.log_activity(company or name, "Lead created from the web form" + (f" — {message}" if message else ""), activity_type="Note", outcome=None, by_name="Web form", lead_id=lid)
     return {"message": THANKS}
 
 

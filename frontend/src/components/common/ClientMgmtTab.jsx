@@ -1,123 +1,108 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Plus, UploadSimple, Warning, Link as LinkIcon } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { DownloadSimple, Link as LinkIcon, MagnifyingGlass, UploadSimple } from "@phosphor-icons/react";
+import { saveBlobAsFile } from "@/lib/api";
 import { WebFormDialog } from "@/components/clientmgmt/WebFormDialog";
-import { StepBar } from "@/components/clientmgmt/StepBar";
-import { LeadsBoard } from "@/components/clientmgmt/LeadsBoard";
-import { LeadDetail } from "@/components/clientmgmt/LeadDetail";
-import { NewLeadDialog, ImportLeadsDialog, QualifyDialog, PromptDialog } from "@/components/clientmgmt/LeadDialogs";
-import { ProposalsPanel, ContractsPanel, ClientsPanel } from "@/components/clientmgmt/SalesPanels";
-import { DashboardPanel } from "@/components/clientmgmt/DashboardPanel";
+import { ImportDialog } from "@/components/clientmgmt/ImportDialog";
+import { OpportunityDialog } from "@/components/clientmgmt/OpportunityDialog";
+import { OverviewSheet } from "@/components/clientmgmt/sheet/OverviewSheet";
+import { LeadsSheet, AccountsSheet, OpportunitiesSheet } from "@/components/clientmgmt/sheet/CrmSheets";
+import { FollowupsSheet, ActivitySheet, ListsSheet } from "@/components/clientmgmt/sheet/TrackerSheets";
+import { ProposalsPanel, ContractsPanel } from "@/components/clientmgmt/SalesPanels";
 import { InvoicesPanel, PaymentsPanel, AdvancesPanel, LedgerPanel } from "@/components/clientmgmt/AccountsPanels";
-import { STAGE, apiError, money } from "@/components/clientmgmt/constants";
+import { apiError } from "@/components/clientmgmt/constants";
 
-const VIEWS = [["dashboard", "Dashboard"], ["flow", "Sales Flow"], ["clients", "Clients"], ["proposals", "Proposals"], ["contracts", "Contracts"], ["invoices", "Invoices"], ["payments", "Payments"], ["advances", "Advances"], ["ledger", "Ledger"]];
-const STEP_VIEW = { "Lead Capture": "flow", "Qualify": "flow", "Proposal Sent": "proposals", "Review": "proposals", "PO Won": "proposals", "Convert to Engagement": "contracts", "Closed": "flow" };
+// Client Management as a workbook: the Sales CRM sheets (Overview, Leads, Accounts, Opportunities, Follow-ups, Activity Log, Lists) with their tabs along the bottom like Excel,
+// then the after-sale sheets (proposals → contracts → invoices → payments → advances → ledger). A BDR picker filters every CRM sheet, like the per-BDR copies of the workbook.
+const CRM = [["dashboard", "Overview", "#16A34A"], ["leads", "Leads", "#2563EB"], ["accounts", "Accounts", "#0D9488"], ["opportunities", "Opportunities", "#EA580C"], ["followups", "Follow-ups", "#7C3AED"], ["activity", "Activity Log", "#DC2626"], ["lists", "Lists", "#6B7280"]];
+const SALE = [["proposals", "Proposals", "#0284C7"], ["contracts", "Contracts", "#4F46E5"], ["invoices", "Invoices", "#CA8A04"], ["payments", "Payments", "#16A34A"], ["advances", "Advances", "#9333EA"], ["ledger", "Ledger", "#475569"]];
+const REPORT = { leads: "leads", accounts: "accounts", opportunities: "opportunities", followups: "followups", activity: "activity", proposals: "proposals", contracts: "contracts", invoices: "invoices", payments: "payments", ledger: "ledger" };
+const SEARCHABLE = ["leads", "accounts", "opportunities", "followups", "activity"];
 
-// Client Management: Lead → Qualify → (Tender) → Proposal → Review → PO won → Contract → Engagement → Invoice → Payment → Ledger
 export function ClientMgmtTab({ api, user }) {
   const flags = user.client_mgmt || {};
   const level = flags.sales || null;          // 'mgr' | 'sales' | 'viewer'
   const acct = flags.accounts || null;        // 'acct' | 'viewer'
-  const views = VIEWS.filter(([k]) => k === "dashboard" ? true : ["flow", "proposals", "contracts"].includes(k) ? !!level || (k === "contracts" && !!acct) : k === "clients" ? true : !!acct);
-  const [view, setView] = useState(views[0]?.[0] || "flow");
-  const [step, setStep] = useState(null);
-  const [pipeline, setPipeline] = useState(null);
-  const [kpis, setKpis] = useState(null);
-  const [leads, setLeads] = useState([]);
-  const [clients, setClients] = useState([]);
+  const allowed = (k) => ({ dashboard: true, accounts: true, leads: !!level, opportunities: !!level, followups: !!level, activity: !!level, lists: true, proposals: !!level, contracts: !!level || !!acct, invoices: !!acct, payments: !!acct, advances: !!acct, ledger: !!acct })[k];
+  const crm = CRM.filter(([k]) => allowed(k)), sale = SALE.filter(([k]) => allowed(k));
+  const [view, setView] = useState("dashboard");
   const [people, setPeople] = useState([]);
-  const [openLead, setOpenLead] = useState(null);
-  const [newLead, setNewLead] = useState(false);
-  const [importing, setImporting] = useState(false);
+  const [bdr, setBdr] = useState("");
+  const [search, setSearch] = useState("");
+  const [oppId, setOppId] = useState(null);
+  const [contractId, setContractId] = useState(null);
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [badges, setBadges] = useState({});
   const [webForm, setWebForm] = useState(false);
-  const [openContract, setOpenContract] = useState(null);
-  const [drop, setDrop] = useState(null);         // { lead, stage }
-  const canWriteLeads = level === "mgr" || level === "sales";
-
-  const refresh = useCallback(async () => {
-    try {
-      const calls = [api.get("/client-mgmt/clients"), api.get("/client-mgmt/people")];
-      if (level) calls.push(api.get("/client-mgmt/pipeline"), api.get("/client-mgmt/leads"), api.get("/client-mgmt/kpis"));
-      const [c, p, pl, l, k] = await Promise.all(calls);
-      setClients(c.data); setPeople(p.data);
-      if (pl) { setPipeline(pl.data); setLeads(l.data); setKpis(k.data); }
-    } catch (e) { toast.error(apiError(e, "Couldn't load Client Management")); }
-  }, [api, level]);
-  useEffect(() => { refresh(); }, [refresh]);
-
-  const stageMove = async (lead, stage, extra = {}) => {
-    try { await api.post(`/client-mgmt/leads/${lead.id}/stage`, { stage, ...extra }); toast.success(`Moved to ${STAGE[stage].label}`); await refresh(); }
-    catch (e) { toast.error(apiError(e, "Couldn't move the lead")); }
-  };
-  const onDropStage = (lead, stage) => {
-    if (stage === lead.stage) return;
-    if (["NEW", "CONTACTED"].includes(stage) && ["NEW", "CONTACTED"].includes(lead.stage)) return stageMove(lead, stage);
-    if (stage === "WON") { toast.message("A lead is Won by booking the PO on an approved proposal — opening it."); return setOpenLead(lead.id); }
-    if (stage === "NEW" && lead.stage === "LOST") return stageMove(lead, "NEW");
-    if (["LOST", "QUALIFIED", "TENDER", "PROPOSAL"].includes(stage)) return setDrop({ lead, stage });
-    toast.error(`A lead can't go from ${STAGE[lead.stage].label} to ${STAGE[stage].label}`);
-  };
+  const [importing, setImporting] = useState(false);
+  const bump = useCallback(() => setRefreshKey(k => k + 1), []);
+  useEffect(() => { api.get("/client-mgmt/people").then(r => setPeople(r.data)).catch(e => toast.error(apiError(e, "Couldn't load the people list"))); }, [api]);
+  useEffect(() => {
+    if (!level) return undefined;
+    const load = () => api.get("/client-mgmt/badges", { params: bdr ? { owner_id: bdr } : {} }).then(r => setBadges(r.data)).catch(() => {});
+    load(); const t = setInterval(load, 60000); return () => clearInterval(t);
+  }, [api, level, bdr, refreshKey]);
+  useEffect(() => { setSearch(""); }, [view]);
 
   const onAlert = (a) => {
-    if (a.lead_id) return setOpenLead(a.lead_id);
-    if (a.proposal_id) return pickView("proposals");
-    if (a.contract_id) { setOpenContract({ id: a.contract_id, n: Date.now() }); return pickView("contracts"); }
-    if (a.invoice_id) return pickView("invoices");
+    if (a.followup_id) return setView("followups");
+    if (a.opportunity_id) return setOppId(a.opportunity_id);
+    if (a.proposal_id) return setView("proposals");
+    if (a.contract_id) { setContractId({ id: a.contract_id, n: Date.now() }); return setView("contracts"); }
+    if (a.invoice_id) return setView("invoices");
   };
-  const pickStep = (name) => { setStep(name); setView(STEP_VIEW[name]); };
-  const pickView = (v) => { setStep(null); setView(v); };
-  const stats = useMemo(() => {
-    const by = pipeline?.leads_by_stage || {};
-    const open = ["NEW", "CONTACTED", "QUALIFIED", "TENDER", "PROPOSAL"].reduce((s, k) => s + (by[k]?.value || 0), 0);
-    return { open, overdue: pipeline?.overdue_followups ?? 0 };
-  }, [pipeline]);
-  const pct = (v) => (v == null ? "—" : `${v}%`);
-  const shownLeads = step === "Lead Capture" ? leads.filter(l => ["NEW", "CONTACTED"].includes(l.stage)) : step === "Qualify" ? leads.filter(l => ["QUALIFIED", "TENDER"].includes(l.stage)) : step === "Closed" ? leads.filter(l => ["WON", "LOST"].includes(l.stage)) : leads;
+  const goTo = (v) => { setOppId(null); setView(v); };
+  const exportSheet = async () => { try { const r = await api.get(`/client-mgmt/reports/${REPORT[view]}.csv`, { responseType: "blob" }); saveBlobAsFile(r.data, `${REPORT[view]}.csv`); } catch (e) { toast.error(apiError(e, "Couldn't export")); } };
+  const common = { api, user, level, people, bdr, refreshKey, search, onChanged: bump, openOpp: setOppId };
+  const badge = (k) => (k === "followups" ? badges.due_followups : k === "leads" ? badges.new_leads : 0);
+  const Tab = ({ k, l, color }) => (
+    <button role="tab" aria-selected={view === k} onClick={() => setView(k)} data-testid={`cm-view-${k}`} className="relative px-3.5 py-2.5 text-sm whitespace-nowrap flex items-center gap-1.5 -mb-px"
+      style={{ fontWeight: view === k ? 700 : 500, color: view === k ? "var(--text-primary)" : "var(--text-muted)", borderBottom: `2px solid ${view === k ? color : "transparent"}` }}>
+      {l}{badge(k) > 0 && <span className="rounded-full text-[10px] font-bold px-1.5 text-white" style={{ background: k === "followups" ? "#DC2626" : "#2563EB" }} data-testid={`badge-${k}`}>{badge(k)}</span>}
+    </button>
+  );
+  const isCrm = SEARCHABLE.includes(view);
 
   return (
-    <div className="space-y-5" data-testid="client-mgmt-tab">
-      <div className="flex flex-wrap gap-2" role="tablist" data-testid="cm-views">{views.map(([k, l]) => <button key={k} role="tab" aria-selected={view === k} onClick={() => pickView(k)} data-testid={`cm-view-${k}`} className="rounded-full px-4 h-9 text-sm font-semibold" style={view === k ? { background: "var(--brand-primary)", color: "#fff" } : { background: "var(--surface)", border: "1px solid var(--border-color)" }}>{l}</button>)}</div>
+    <div className="space-y-4" data-testid="client-mgmt-tab">
+      <div className="flex flex-wrap items-stretch" style={{ borderBottom: "1px solid var(--border-color)" }} role="tablist" data-testid="cm-views" aria-label="Client management sections">
+        {crm.map(([k, l, c]) => <Tab key={k} k={k} l={l} color={c} />)}
+        {sale.length > 0 && <span className="self-center text-[10px] font-bold uppercase tracking-wide px-3 whitespace-nowrap" style={{ color: "var(--text-subtle)" }}>After the sale ›</span>}
+        {sale.map(([k, l, c]) => <Tab key={k} k={k} l={l} color={c} />)}
+      </div>
 
-      {level && pipeline && (view === "flow" || ["proposals", "contracts"].includes(view)) && <StepBar steps={pipeline.steps} active={step} onPick={pickStep} />}
+      <div className="flex flex-wrap items-center gap-2" data-testid="cm-toolbar">
+        {isCrm && <div className="relative"><MagnifyingGlass className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" /><Input className="h-9 pl-9 w-60" placeholder="Search" value={search} onChange={e => setSearch(e.target.value)} data-testid="sheet-search" /></div>}
+        {level && level !== "sales" && ["dashboard", "leads", "accounts", "opportunities", "followups", "activity"].includes(view) && (
+          <label className="inline-flex items-center gap-2 text-sm" style={{ color: "var(--text-muted)" }}>BDR <select className="h-9 rounded-lg border px-2.5 text-sm bg-white" value={bdr} onChange={e => setBdr(e.target.value)} data-testid="bdr-filter"><option value="">All BDRs</option>{people.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>)}
+        <div className="ml-auto flex flex-wrap gap-2">
+          {isCrm && REPORT[view] && <Button size="sm" variant="outline" className="h-9 rounded-lg" onClick={exportSheet} data-testid="export-sheet"><DownloadSimple className="h-4 w-4 mr-1.5" /> Export CSV</Button>}
+          {level && <Button size="sm" variant="outline" className="h-9 rounded-lg" onClick={() => setWebForm(true)} data-testid="web-form-link"><LinkIcon className="h-4 w-4 mr-1.5" /> Web form link</Button>}
+          {level === "mgr" && <Button size="sm" variant="outline" className="h-9 rounded-lg" onClick={() => setImporting(true)} data-testid="import-workbook"><UploadSimple className="h-4 w-4 mr-1.5" /> Import workbook</Button>}
+        </div>
+      </div>
 
-      {view === "dashboard" && <DashboardPanel api={api} sales={!!level} accounts={!!acct} onAlert={onAlert} />}
-      {view === "flow" && level && (
-        <>
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3" data-testid="cm-kpis">
-            <div className="stat-card justify-between min-h-[96px]"><p className="text-xs" style={{ color: "var(--text-muted)" }}>Open pipeline</p><p className="text-xl font-bold" data-testid="kpi-open">{money(stats.open)}</p></div>
-            <div className="stat-card justify-between min-h-[96px]"><p className="text-xs" style={{ color: "var(--text-muted)" }}>Lead → proposal</p><p className="text-xl font-bold" data-testid="kpi-l2p">{pct(kpis?.lead_to_proposal_pct)}</p></div>
-            <div className="stat-card justify-between min-h-[96px]"><p className="text-xs" style={{ color: "var(--text-muted)" }}>Win rate</p><p className="text-xl font-bold" data-testid="kpi-win">{pct(kpis?.win_rate_pct)}</p></div>
-            <div className="stat-card justify-between min-h-[96px]"><p className="text-xs" style={{ color: "var(--text-muted)" }}>Follow-ups due</p><p className="text-xl font-bold flex items-center gap-1" style={{ color: stats.overdue ? "#E11D48" : undefined }} data-testid="kpi-overdue">{stats.overdue > 0 && <Warning className="h-4 w-4" weight="fill" />}{stats.overdue}</p></div>
-          </div>
-          {kpis?.receivables_overdue_60 && kpis.receivables_overdue_60.invoices > 0 && <p className="text-sm rounded-xl p-3" style={{ background: "#FEF2F2", color: "#991B1B" }} data-testid="kpi-receivables">{money(kpis.receivables_overdue_60.amount)} across {kpis.receivables_overdue_60.invoices} invoice(s) is over 60 days old.</p>}
-          <div className="flex flex-wrap gap-2">
-            {canWriteLeads && <><Button className="bg-[#0020F8] text-white hover:bg-[#0019C4] rounded-xl h-10" onClick={() => setNewLead(true)} data-testid="new-lead"><Plus className="h-4 w-4 mr-1.5" weight="bold" /> New lead</Button>
-              <Button variant="outline" className="rounded-xl h-10" onClick={() => setImporting(true)} data-testid="import-leads"><UploadSimple className="h-4 w-4 mr-1.5" /> Import CSV</Button></>}
-            <Button variant="outline" className="rounded-xl h-10" onClick={() => setWebForm(true)} data-testid="web-form-link"><LinkIcon className="h-4 w-4 mr-1.5" /> Web form link</Button></div>
-          <LeadsBoard leads={shownLeads} canMove={canWriteLeads} onOpen={(l) => setOpenLead(l.id)} onDropStage={onDropStage} />
-        </>)}
-      {view === "clients" && <ClientsPanel api={api} level={level} canEdit={level === "mgr" || acct === "acct"} />}
-      {view === "proposals" && level && <ProposalsPanel api={api} user={user} level={level} focus={step} />}
-      {view === "contracts" && <ContractsPanel key={openContract?.n || "all"} api={api} level={level} canAccounts={!!acct} focus={step} openId={openContract?.id} />}
-      {view === "invoices" && acct && <InvoicesPanel api={api} canEdit={acct === "acct"} />}
-      {view === "payments" && acct && <PaymentsPanel api={api} canEdit={acct === "acct"} />}
-      {view === "advances" && acct && <AdvancesPanel api={api} canEdit={acct === "acct"} />}
-      {view === "ledger" && acct && <LedgerPanel api={api} />}
+      <div data-testid="cm-body">
+        {view === "dashboard" && <OverviewSheet api={api} level={level} accounts={!!acct} bdr={bdr} onAlert={onAlert} refreshKey={refreshKey} />}
+        {view === "leads" && level && <LeadsSheet {...common} />}
+        {view === "accounts" && <AccountsSheet {...common} />}
+        {view === "opportunities" && level && <OpportunitiesSheet {...common} />}
+        {view === "followups" && level && <FollowupsSheet {...common} />}
+        {view === "activity" && level && <ActivitySheet {...common} />}
+        {view === "lists" && <ListsSheet api={api} />}
+        {view === "proposals" && level && <ProposalsPanel api={api} user={user} level={level} />}
+        {view === "contracts" && <ContractsPanel key={contractId?.n || "all"} api={api} level={level} canAccounts={!!acct} openId={contractId?.id} />}
+        {view === "invoices" && acct && <InvoicesPanel api={api} canEdit={acct === "acct"} />}
+        {view === "payments" && acct && <PaymentsPanel api={api} canEdit={acct === "acct"} />}
+        {view === "advances" && acct && <AdvancesPanel api={api} canEdit={acct === "acct"} />}
+        {view === "ledger" && acct && <LedgerPanel api={api} />}
+      </div>
 
-      <NewLeadDialog open={newLead} onOpenChange={setNewLead} api={api} people={people} canAssign={level === "mgr"} onCreated={refresh} />
+      {oppId && <OpportunityDialog api={api} user={user} level={level} people={people} oppId={oppId} onClose={() => setOppId(null)} onChanged={bump} onGoTo={goTo} />}
       <WebFormDialog api={api} open={webForm} onOpenChange={setWebForm} />
-      <ImportLeadsDialog open={importing} onOpenChange={setImporting} api={api} onDone={refresh} />
-      {openLead && <LeadDetail api={api} user={user} leadId={openLead} open onOpenChange={(o) => !o && setOpenLead(null)} level={level} clients={clients} people={people} onChanged={refresh} onOpenContract={() => { setOpenLead(null); pickView("contracts"); }} />}
-
-      {drop && drop.stage === "LOST" && <PromptDialog open onOpenChange={(o) => !o && setDrop(null)} title="Mark the lead lost" submitLabel="Mark lost" fields={[{ key: "reason", label: "Reason", required: true }]}
-        onSubmit={async (v) => { await api.post(`/client-mgmt/leads/${drop.lead.id}/stage`, { stage: "LOST", lost_reason: v.reason }); toast.success("Marked lost"); await refresh(); }} />}
-      {drop && drop.stage === "QUALIFIED" && <QualifyDialog open onOpenChange={(o) => !o && setDrop(null)} api={api} lead={drop.lead} clients={clients} onDone={refresh} />}
-      {drop && drop.stage === "TENDER" && <PromptDialog open onOpenChange={(o) => !o && setDrop(null)} title="Open a tender" submitLabel="Open tender" fields={[{ key: "reference", label: "Tender reference" }, { key: "due_date", label: "Due date", type: "date" }]}
-        onSubmit={async (v) => { try { await api.post(`/client-mgmt/leads/${drop.lead.id}/to-tender`, { reference: v.reference || null, due_date: v.due_date || null }); toast.success("Tender opened"); await refresh(); } catch (e) { throw e; } }} />}
-      {drop && drop.stage === "PROPOSAL" && <PromptDialog open onOpenChange={(o) => !o && setDrop(null)} title="Create a proposal" submitLabel="Create" fields={[{ key: "title", label: "Proposal title", required: true, initial: `Proposal for ${drop.lead.company_name || drop.lead.client_name || ""}`.trim() }]}
-        onSubmit={async (v) => { try { const { data } = await api.post(`/client-mgmt/leads/${drop.lead.id}/to-proposal`, { title: v.title, items: [] }); toast.success(`Proposal ${data.code} drafted`); await refresh(); setOpenLead(drop.lead.id); } catch (e) { throw e; } }} />}
+      <ImportDialog api={api} open={importing} onOpenChange={setImporting} onDone={bump} />
     </div>
   );
 }

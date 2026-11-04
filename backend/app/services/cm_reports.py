@@ -14,13 +14,15 @@ from app.db import execute_query
 from app.services import cm_accounts as acct
 from app.services import cm_core as core
 from app.services.cm_core import D, F, Ctx
-from app.services.cm_sales import lead_scope
+from app.services import cm_crm
 
 BUCKETS = (("0-30", 0, 30), ("31-60", 31, 60), ("61-90", 61, 90), ("90+", 91, 10 ** 6))
 REVIEW_STALE_DAYS = 3
 EXPIRY_WARN_DAYS = 7
 CONTRACT_END_WARN_DAYS = 30
 DRAFT_CONTRACT_DAYS = 7
+STALE_OPP_DAYS = 14
+from datetime import timedelta
 
 
 def _age(iso: str) -> int:
@@ -74,11 +76,17 @@ async def alerts(ctx: Ctx) -> list:
     core.require_any(ctx)
     out, today = [], core.today()
     if ctx.sales:
-        scope, args = lead_scope(ctx)
-        for r in (await execute_query(f"SELECT l.id, l.code, l.company_name, l.next_followup_at FROM leads l WHERE {scope} AND l.stage IN ('NEW','CONTACTED','QUALIFIED','TENDER','PROPOSAL') AND l.next_followup_at IS NOT NULL AND l.next_followup_at <= %s ORDER BY l.next_followup_at",
-                                      (*args, today.isoformat()), fetch_all=True) or []):
-            late = (today - date.fromisoformat(r["next_followup_at"])).days
-            out.append(_alert("FOLLOWUP", "high" if late > 0 else "medium", f"Follow up {r['company_name'] or r['code']}" + (f" — {late} day(s) overdue" if late > 0 else " — due today"), lead_id=r["id"]))
+        fsql, fargs = cm_crm.scope(ctx, "f")
+        for r in (await execute_query(f"SELECT f.id, f.company_name, s.step_no, s.step_date FROM followup_steps s JOIN followups f ON f.id = s.followup_id WHERE {fsql} AND s.step_date <= %s "
+                                      "AND (s.outcome IS NULL OR s.outcome IN ('Pending', 'Rescheduled')) ORDER BY s.step_date LIMIT 100", (*fargs, today.isoformat()), fetch_all=True) or []):
+            late = (today - date.fromisoformat(r["step_date"])).days
+            out.append(_alert("FOLLOWUP", "high" if late > 0 else "medium", f"{core.CADENCE[r['step_no'] - 1]} with {r['company_name']}" + (f" — {late} day(s) overdue" if late > 0 else " — due today"), followup_id=r["id"]))
+        osql, oargs = cm_crm.scope(ctx, "o")
+        stale = (today - timedelta(days=STALE_OPP_DAYS)).isoformat()
+        for r in (await execute_query(f"SELECT o.id, o.code, o.opp_name, o.last_activity_date, o.created_date FROM opportunities o WHERE {osql} AND o.stage IN ('Discovery', 'Demo Completed', 'Pricing/POC Discussion', 'Qualified') "
+                                      "AND COALESCE(o.last_activity_date, o.created_date, '9999') < %s ORDER BY COALESCE(o.last_activity_date, o.created_date) LIMIT 30", (*oargs, stale), fetch_all=True) or []):
+            since = r["last_activity_date"] or r["created_date"]
+            out.append(_alert("OPPORTUNITY_STALE", "low", f"{r['opp_name']} has had no activity for {_age(since)} days", opportunity_id=r["id"]))
         pscope, pargs = ("", []) if ctx.sees_all_sales else (" AND p.owner_id = %s", [ctx.uid])
         for r in (await execute_query(f"SELECT p.id, p.code, p.title, p.status, p.review_status, p.valid_until, p.sent_at, p.updated_at FROM proposals p WHERE p.status IN ('DRAFT','SENT'){pscope}", tuple(pargs), fetch_all=True) or []):
             if r["status"] == "SENT" and r["review_status"] == "PENDING" and ctx.sales == "mgr" and _age(r["sent_at"] or "") >= REVIEW_STALE_DAYS:
@@ -96,7 +104,7 @@ async def alerts(ctx: Ctx) -> list:
     if ctx.sales or ctx.acct:
         where, args = "", []
         if ctx.sales == "sales" and not ctx.acct:
-            where, args = " AND k.proposal_id IN (SELECT id FROM proposals WHERE owner_id = %s)", [ctx.uid]
+            where, args = " AND (k.proposal_id IN (SELECT id FROM proposals WHERE owner_id = %s) OR k.opportunity_id IN (SELECT id FROM opportunities WHERE owner_id = %s))", [ctx.uid, ctx.uid]
         for k in (await execute_query(f"SELECT k.id, k.code, k.status, k.end_date, k.created_at, k.agreement_status, (SELECT COUNT(*) FROM contract_files f WHERE f.contract_id = k.id AND f.kind = 'PO') AS po_files FROM contracts k WHERE k.status IN ('DRAFT','ACTIVE'){where}", tuple(args), fetch_all=True) or []):
             if k["status"] == "DRAFT" and _age(k["created_at"] or "") >= DRAFT_CONTRACT_DAYS:
                 out.append(_alert("CONTRACT_NOT_CONVERTED", "medium", f"{k['code']} has been a draft for {_age(k['created_at'])} days — convert it to an engagement", contract_id=k["id"]))
@@ -125,9 +133,10 @@ async def alerts(ctx: Ctx) -> list:
     return out
 
 
-async def dashboard(ctx: Ctx) -> dict:
+async def dashboard(ctx: Ctx, owner_id: int = 0) -> dict:
+    """The sheet's overview (``crm``; null without Sales access) plus alerts and, for Accounts, receivables ageing and the 6-month trend."""
     core.require_any(ctx)
-    out = {"kpis": await acct.kpis(ctx), "alerts": await alerts(ctx), "aging": None, "trend": None}
+    out = {"crm": await cm_crm.overview(ctx, owner_id) if ctx.sales else None, "kpis": await acct.kpis(ctx), "alerts": await alerts(ctx), "aging": None, "trend": None}
     if ctx.acct:
         out["aging"], out["trend"] = await receivables_aging(ctx), await monthly_trend(ctx)
     return out
@@ -136,7 +145,8 @@ async def dashboard(ctx: Ctx) -> dict:
 # ---------------------------------------------------------------- CSV exports
 
 EXPORTS = {
-    "leads": ("sales", "Leads"), "proposals": ("sales", "Proposals"), "contracts": ("any", "Contracts"),
+    "leads": ("sales", "Leads"), "accounts": ("any", "Accounts"), "opportunities": ("sales", "Opportunities"), "followups": ("sales", "Follow-ups"), "activity": ("sales", "Activity log"),
+    "proposals": ("sales", "Proposals"), "contracts": ("any", "Contracts"),
     "invoices": ("acct", "Invoices"), "payments": ("acct", "Payments"), "receivables": ("acct", "Receivables"), "ledger": ("acct", "Client balances"),
 }
 
@@ -152,21 +162,38 @@ def _csv(header: list, rows: list) -> str:
 
 
 async def export_csv(ctx: Ctx, name: str) -> tuple:
-    """(filename, csv text). Uses the same access checks as the lists the data comes from."""
+    """(filename, csv text). The CRM exports use the sheet's own column headings, so a file exported here can be imported again. Same access checks as the lists the data comes from."""
     from app.services import cm_sales as sales
     if name not in EXPORTS:
         raise HTTPException(status_code=404, detail="Unknown report")
     stamp = core.today().isoformat()
     if name == "leads":
-        core.require_sales_read(ctx)
-        data = await sales.list_leads(ctx)
-        return f"leads-{stamp}.csv", _csv(["Code", "Company", "Client", "Contact", "Phone", "Email", "Source", "Stage", "Estimated value", "Owner", "Next follow-up", "Lost reason", "Created"],
-                                          [[d["code"], d["company_name"], d["client_name"], d["contact_name"], d["phone"], d["email"], d["source"], d["stage"], d["estimated_value"], d["owner_name"], d["next_followup_at"], d["lost_reason"], d["created_at"]] for d in data])
+        data = await cm_crm.list_leads(ctx)
+        return f"leads-{stamp}.csv", _csv(["Lead ID", "Company Name", "Contact Person", "Phone", "Email", "Location", "Lead Source", "Lead Status", "Date Added", "BDR Name", "Converted to Opportunity?", "Interested In / Notes", "Next Action"],
+                                          [[d["code"], d["company_name"], d["contact_person"], d["phone"], d["email"], d["location"], d["source"], d["status"], d["date_added"], d["bdr"], "Yes" if d["converted"] else "No", d["interested_in"], d["next_action"]] for d in data])
+    if name == "accounts":
+        core.require_any(ctx)
+        data = await sales.list_clients(ctx)
+        return f"accounts-{stamp}.csv", _csv(["Account ID", "Company Name", "Industry", "Location", "Website", "Primary Contact", "Phone", "Email", "Account Type", "Account Owner", "Created Date", "Notes"],
+                                             [[d["code"], d["name"], d["industry"], d["location"], d["website"], d["contact_person"], d["phone"], d["email"], d["account_type"], d["owner_name"], (d["created_at"] or "")[:10], d["notes"]] for d in data])
+    if name == "opportunities":
+        data = await cm_crm.list_opportunities(ctx)
+        return f"opportunities-{stamp}.csv", _csv(["Opportunity ID", "Company Name", "Opp Name", "Contact Person", "Stage", "Deal Value (INR)", "Probability %", "Weighted Value (INR)", "Expected Close Date", "Lead Source", "BDR Name", "Created Date",
+                                                   "Last Activity Date", "Next Action", "Notes"],
+                                                  [[d["code"], d["account_name"], d["opp_name"], d["contact_person"], d["stage"], d["deal_value"], d["probability"], d["weighted_value"], d["expected_close_date"], d["lead_source"], d["bdr"],
+                                                    d["created_date"], d["last_activity_date"], d["next_action"], d["notes"]] for d in data])
+    if name == "followups":
+        data = await cm_crm.list_followups(ctx)
+        head = ["Follow-up ID", "Company Name", "Contact Person", "BDR Name", "Opportunity Stage (ref)"] + [h for label in core.CADENCE for h in (f"{label} Date", f"{label} Outcome")] + ["Current Step", "Notes"]
+        return f"followups-{stamp}.csv", _csv(head, [[d["code"], d["company_name"], d["contact_person"], d["bdr"], d["opportunity_stage"]] + [v for st in d["steps"] for v in (st["date"], st["outcome"])] + [d["current_step"], d["notes"]] for d in data])
+    if name == "activity":
+        data = await cm_crm.list_activities(ctx, limit=10000)
+        return f"activity-log-{stamp}.csv", _csv(["Log ID", "Date", "BDR Name", "Company Name", "Activity Type", "Outcome", "Notes"], [[d["code"], d["log_date"], d["bdr"], d["company_name"], d["activity_type"], d["outcome"], d["notes"]] for d in data])
     if name == "proposals":
         core.require_sales_read(ctx)
         data = await sales.list_proposals(ctx)
-        return f"proposals-{stamp}.csv", _csv(["Code", "Title", "Client", "Status", "Review", "Total", "Valid until", "Sent to", "Sent at", "Client response", "Owner"],
-                                              [[d["code"], d["title"], d["client_name"], d["status"], d["review_status"], d["total_amount"], d["valid_until"], d["sent_to"], d["sent_at"], d["client_response"], d["owner_name"]] for d in data])
+        return f"proposals-{stamp}.csv", _csv(["Code", "Title", "Client", "Opportunity", "Status", "Review", "Total", "Valid until", "Sent to", "Sent at", "Client response", "Owner"],
+                                              [[d["code"], d["title"], d["client_name"], d["opportunity_name"], d["status"], d["review_status"], d["total_amount"], d["valid_until"], d["sent_to"], d["sent_at"], d["client_response"], d["owner_name"]] for d in data])
     if name == "contracts":
         data = await sales.list_contracts(ctx)
         return f"contracts-{stamp}.csv", _csv(["Code", "Contract no", "Client", "PO reference", "PO date", "Value", "Start", "End", "Status", "Agreement", "Signed on", "Engagement"],

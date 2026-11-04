@@ -30,23 +30,22 @@ def _send(to: str, subject: str, html_body: str) -> None:
 
 
 async def send_followup_digests(now_local: datetime) -> int:
+    """One digest per BDR: cadence touches that are due today or overdue (a date on or before today with no outcome yet, or marked Pending / Rescheduled)."""
     if now_local.weekday() >= 5 or not _in_window(now_local):
         return 0
     today = now_local.strftime("%Y-%m-%d")
+    due_sql = ("FROM followup_steps s JOIN followups f ON f.id = s.followup_id WHERE s.step_date IS NOT NULL AND s.step_date <= %s AND (s.outcome IS NULL OR s.outcome IN ('Pending', 'Rescheduled'))")
     owners = await execute_query(
-        """SELECT u.id, u.name, u.email FROM users u WHERE u.email IS NOT NULL AND u.email != ''
-             AND EXISTS (SELECT 1 FROM leads l WHERE l.owner_id = u.id AND l.next_followup_at IS NOT NULL AND l.next_followup_at <= %s
-                         AND l.stage IN ('NEW','CONTACTED','QUALIFIED','TENDER','PROPOSAL'))
+        f"""SELECT u.id, u.name, u.email FROM users u WHERE u.email IS NOT NULL AND u.email != ''
+             AND EXISTS (SELECT 1 {due_sql} AND f.owner_id = u.id)
              AND NOT EXISTS (SELECT 1 FROM reminder_log r WHERE r.user_id = u.id AND r.date = %s AND r.kind = 'cm_followup')""", (today, today), fetch_all=True)
     sent = 0
     for o in (owners or []):
         if not await _claim(o["id"], today, "cm_followup"):
             continue
-        leads = await execute_query(
-            """SELECT l.company_name, l.code, l.stage, l.next_followup_at FROM leads l WHERE l.owner_id = %s AND l.next_followup_at IS NOT NULL AND l.next_followup_at <= %s
-               AND l.stage IN ('NEW','CONTACTED','QUALIFIED','TENDER','PROPOSAL') ORDER BY l.next_followup_at""", (o["id"], today), fetch_all=True)
-        rows = [(l["company_name"] or l["code"], l["stage"].title(), l["next_followup_at"], (now_local.date() - datetime.strptime(l["next_followup_at"], "%Y-%m-%d").date()).days) for l in (leads or [])]
-        _send(o["email"], f"Follow-ups due: {len(rows)} lead{'s' if len(rows) != 1 else ''}", _cm_followup_digest_email_html(o["name"], rows))
+        steps = await execute_query(f"SELECT f.company_name, s.step_no, s.step_date {due_sql} AND f.owner_id = %s ORDER BY s.step_date", (today, o["id"]), fetch_all=True)
+        rows = [(r["company_name"], core.CADENCE[r["step_no"] - 1], r["step_date"], (now_local.date() - datetime.strptime(r["step_date"], "%Y-%m-%d").date()).days) for r in (steps or [])]
+        _send(o["email"], f"Follow-ups due: {len(rows)} touch{'es' if len(rows) != 1 else ''}", _cm_followup_digest_email_html(o["name"], rows))
         sent += 1
     if sent:
         logger.info(f"Client management follow-up digests sent: {sent}")

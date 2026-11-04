@@ -1,5 +1,5 @@
-"""Client Management (``/api/client-mgmt``): clients, leads, tenders, proposals, contracts and engagements, invoices, payments, advances,
-the client ledger, the pipeline summary and KPIs. The no-login proposal reply link lives in ``public_proposals.py``.
+"""Client Management (``/api/client-mgmt``): the Sales CRM (leads, accounts, opportunities, follow-up cadence, activity log, overview) and, after a deal is won,
+proposals, contracts and engagements, invoices, payments, advances and the client ledger. The no-login proposal reply and the web form live in ``public_*.py``.
 
 Who can do what is decided in ``app.services.cm_core`` (Sales / Manager through the "sales" matrix row, Accounts through "accounts").
 """
@@ -12,12 +12,14 @@ from fastapi.responses import Response
 from app.core.config import CLIENT_MGMT_FILE_MAX_BYTES
 from app.core.security import get_current_user
 from app.schemas.client_mgmt import (
-    ActivityIn, AdjustIn, AgreementIn, InvoiceEmailIn, SendDocumentsIn, AdvanceIn, AllocateIn, ClientIn, ClientUpdate, ContractStatusIn, ContractUpdate, EngagementIn, InvoiceIn, InvoiceUpdate, LeadImport, LeadIn, LeadUpdate,
-    MonthEndIn, PaymentIn, PoIn, ProposalIn, ProposalUpdate, QualifyIn, ReasonIn, ReviewIn, SendIn, StageMove, TenderIn, TenderUpdate,
+    ActivityIn, ActivityUpdate, AdjustIn, AdvanceIn, AgreementIn, AllocateIn, ClientIn, ClientUpdate, ContractStatusIn, ContractUpdate, ConvertIn, EngagementIn, FollowupIn, FollowupUpdate,
+    InvoiceEmailIn, InvoiceIn, InvoiceUpdate, LeadIn, LeadUpdate, MonthEndIn, OpportunityIn, OpportunityUpdate, PaymentIn, PoIn, ProposalIn, ProposalUpdate, ReasonIn, ReviewIn, SendDocumentsIn, SendIn, StepIn,
 )
 from app.services import cm_accounts as acct
 from app.services import cm_contract_docs as docs
 from app.services import cm_core as core
+from app.services import cm_crm as crm
+from app.services import cm_import
 from app.services import cm_documents
 from app.services import cm_reports as reports
 from app.services import cm_webform
@@ -48,8 +50,8 @@ async def people(request: Request):
 # ---------- clients ----------
 
 @client_mgmt_router.get("/clients")
-async def list_clients(request: Request, q: str = "", active: Optional[bool] = None):
-    return await sales.list_clients(await _ctx(request), q, active)
+async def list_clients(request: Request, q: str = "", active: Optional[bool] = None, account_type: str = "", industry: str = "", owner_id: int = 0):
+    return await sales.list_clients(await _ctx(request), q, active, account_type, industry, owner_id)
 
 @client_mgmt_router.post("/clients")
 async def create_client(data: ClientIn, request: Request):
@@ -74,72 +76,148 @@ async def client_ledger(client_id: int, request: Request):
     return await acct.client_ledger(await _ctx(request), client_id)
 
 
+@client_mgmt_router.get("/badges")
+async def badges(request: Request, owner_id: int = 0):
+    return await crm.badges(await _ctx(request), owner_id)
+
+@client_mgmt_router.get("/lists")
+async def lists(request: Request):
+    """The dropdown lists (the sheet's "Lists" tab)."""
+    await _ctx(request)
+    return crm.lists()
+
+
 # ---------- leads ----------
 
 @client_mgmt_router.get("/leads")
-async def list_leads(request: Request, stage: str = "", owner_id: int = 0, q: str = "", overdue: bool = False):
-    """The leads board data. ``overdue=true`` lists follow-ups due today or earlier."""
-    return await sales.list_leads(await _ctx(request), stage=stage, owner_id=owner_id, q=q, overdue=overdue)
+async def list_leads(request: Request, status: str = "", source: str = "", owner_id: int = 0, q: str = "", converted: Optional[bool] = None):
+    return await crm.list_leads(await _ctx(request), status=status, source=source, owner_id=owner_id, q=q, converted=converted)
 
 @client_mgmt_router.post("/leads")
 async def create_lead(data: LeadIn, request: Request):
     """409 with ``detail.duplicates`` when the email or phone matches another lead; resend with ``confirm_duplicate`` to create it anyway."""
-    return await sales.create_lead(await _ctx(request), data)
-
-@client_mgmt_router.post("/leads/import")
-async def import_leads(data: LeadImport, request: Request):
-    return await sales.import_leads(await _ctx(request), data.rows, data.confirm_duplicate)
+    return await crm.create_lead(await _ctx(request), data)
 
 @client_mgmt_router.get("/leads/{lead_id}")
 async def get_lead(lead_id: int, request: Request):
-    return await sales.get_lead(await _ctx(request), lead_id)
+    return await crm.get_lead(await _ctx(request), lead_id)
 
 @client_mgmt_router.put("/leads/{lead_id}")
 async def update_lead(lead_id: int, data: LeadUpdate, request: Request):
-    return await sales.update_lead(await _ctx(request), lead_id, data)
+    return await crm.update_lead(await _ctx(request), lead_id, data)
 
-@client_mgmt_router.get("/leads/{lead_id}/activities")
-async def list_activities(lead_id: int, request: Request):
-    return await sales.list_activities(await _ctx(request), lead_id)
+@client_mgmt_router.delete("/leads/{lead_id}")
+async def delete_lead(lead_id: int, request: Request):
+    await crm.delete_lead(await _ctx(request), lead_id)
+    return {"message": "Lead deleted"}
 
-@client_mgmt_router.post("/leads/{lead_id}/activities")
-async def add_activity(lead_id: int, data: ActivityIn, request: Request):
-    return await sales.add_activity(await _ctx(request), lead_id, data)
-
-@client_mgmt_router.post("/leads/{lead_id}/stage")
-async def move_stage(lead_id: int, data: StageMove, request: Request):
-    return await sales.move_stage(await _ctx(request), lead_id, data)
-
-@client_mgmt_router.post("/leads/{lead_id}/qualify")
-async def qualify(lead_id: int, data: QualifyIn, request: Request):
-    """400 with ``detail.missing`` listing exactly what the lead still needs."""
-    return await sales.qualify(await _ctx(request), lead_id, data)
-
-@client_mgmt_router.post("/leads/{lead_id}/to-tender")
-async def to_tender(lead_id: int, data: TenderIn, request: Request):
-    return await sales.to_tender(await _ctx(request), lead_id, data)
-
-@client_mgmt_router.post("/leads/{lead_id}/to-proposal")
-async def to_proposal(lead_id: int, data: ProposalIn, request: Request):
-    return await sales.to_proposal(await _ctx(request), lead_id, data)
-
-@client_mgmt_router.get("/leads/{lead_id}/tenders")
-async def list_tenders(lead_id: int, request: Request):
-    return await sales.list_tenders(await _ctx(request), lead_id)
+@client_mgmt_router.post("/leads/{lead_id}/convert")
+async def convert_lead(lead_id: int, data: ConvertIn, request: Request):
+    """Finds or creates the account by company name, opens a Discovery opportunity and marks the lead Converted."""
+    return await crm.convert_lead(await _ctx(request), lead_id, data)
 
 
-# ---------- tenders ----------
+# ---------- opportunities ----------
 
-@client_mgmt_router.put("/tenders/{tender_id}")
-async def update_tender(tender_id: int, data: TenderUpdate, request: Request):
-    return await sales.update_tender(await _ctx(request), tender_id, data)
+@client_mgmt_router.get("/opportunities")
+async def list_opportunities(request: Request, stage: str = "", owner_id: int = 0, client_id: int = 0, q: str = "", open_only: bool = False):
+    return await crm.list_opportunities(await _ctx(request), stage=stage, owner_id=owner_id, client_id=client_id, q=q, open_only=open_only)
+
+@client_mgmt_router.post("/opportunities")
+async def create_opportunity(data: OpportunityIn, request: Request):
+    return await crm.create_opportunity(await _ctx(request), data)
+
+@client_mgmt_router.get("/opportunities/{opp_id}")
+async def get_opportunity(opp_id: int, request: Request):
+    return await crm.get_opportunity(await _ctx(request), opp_id)
+
+@client_mgmt_router.put("/opportunities/{opp_id}")
+async def update_opportunity(opp_id: int, data: OpportunityUpdate, request: Request):
+    """Stage is a dropdown. Closed Won needs a deal value; reopening a closed deal is for managers."""
+    return await crm.update_opportunity(await _ctx(request), opp_id, data)
+
+@client_mgmt_router.delete("/opportunities/{opp_id}")
+async def delete_opportunity(opp_id: int, request: Request):
+    await crm.delete_opportunity(await _ctx(request), opp_id)
+    return {"message": "Opportunity deleted"}
+
+@client_mgmt_router.post("/opportunities/{opp_id}/proposals")
+async def opportunity_proposal(opp_id: int, data: ProposalIn, request: Request):
+    return await sales.to_proposal(await _ctx(request), opp_id, data)
+
+@client_mgmt_router.post("/opportunities/{opp_id}/contract")
+async def opportunity_contract(opp_id: int, data: PoIn, request: Request):
+    """A Closed Won deal that has no proposal in the portal: book its PO and create the contract (manager)."""
+    return await sales.book_po_direct(await _ctx(request), opp_id, data)
+
+
+# ---------- follow-up cadence ----------
+
+@client_mgmt_router.get("/followups")
+async def list_followups(request: Request, owner_id: int = 0, q: str = "", opportunity_id: int = 0, client_id: int = 0):
+    return await crm.list_followups(await _ctx(request), owner_id=owner_id, q=q, opportunity_id=opportunity_id, client_id=client_id)
+
+@client_mgmt_router.post("/followups")
+async def create_followup(data: FollowupIn, request: Request):
+    return await crm.create_followup(await _ctx(request), data)
+
+@client_mgmt_router.get("/followups/{fid}")
+async def get_followup(fid: int, request: Request):
+    return await crm.get_followup(await _ctx(request), fid)
+
+@client_mgmt_router.put("/followups/{fid}")
+async def update_followup(fid: int, data: FollowupUpdate, request: Request):
+    return await crm.update_followup(await _ctx(request), fid, data)
+
+@client_mgmt_router.delete("/followups/{fid}")
+async def delete_followup(fid: int, request: Request):
+    await crm.delete_followup(await _ctx(request), fid)
+    return {"message": "Follow-up deleted"}
+
+@client_mgmt_router.put("/followups/{fid}/steps/{step_no}")
+async def set_followup_step(fid: int, step_no: int, data: StepIn, request: Request):
+    """Fill or clear one touch (1 = Email 1, 2 = Call 1, … 10 = Call 5). A touch with an outcome is also written to the activity log."""
+    return await crm.set_step(await _ctx(request), fid, step_no, data)
+
+
+# ---------- activity log ----------
+
+@client_mgmt_router.get("/activity")
+async def list_activity(request: Request, date_from: str = "", date_to: str = "", owner_id: int = 0, activity_type: str = "", q: str = "", client_id: int = 0,
+                        opportunity_id: int = 0, lead_id: int = 0, include_notes: bool = True, limit: int = 3000):
+    return await crm.list_activities(await _ctx(request), date_from=date_from, date_to=date_to, owner_id=owner_id, activity_type=activity_type, q=q, client_id=client_id,
+                                     opportunity_id=opportunity_id, lead_id=lead_id, include_notes=include_notes, limit=limit)
+
+@client_mgmt_router.post("/activity")
+async def create_activity(data: ActivityIn, request: Request):
+    return await crm.create_activity(await _ctx(request), data)
+
+@client_mgmt_router.put("/activity/{aid}")
+async def update_activity(aid: int, data: ActivityUpdate, request: Request):
+    return await crm.update_activity(await _ctx(request), aid, data)
+
+@client_mgmt_router.delete("/activity/{aid}")
+async def delete_activity(aid: int, request: Request):
+    await crm.delete_activity(await _ctx(request), aid)
+    return {"message": "Activity deleted"}
+
+
+# ---------- import the Sales CRM workbook ----------
+
+@client_mgmt_router.post("/import")
+async def import_workbook(request: Request, file: UploadFile = File(...), apply: bool = False, sheets: str = ""):
+    """Upload the Sales CRM workbook (.xlsx) or one sheet (.csv). ``apply=false`` previews what would be created / skipped; ``apply=true`` writes it (re-running skips what exists).
+    ``sheets`` limits the import to those sheet names (comma separated). Managers only."""
+    data = await file.read(cm_import.MAX_BYTES + 1)
+    only = [x.strip() for x in sheets.split(",") if x.strip()] or None
+    return await cm_import.import_workbook(await _ctx(request), file.filename or "file", data, apply, only)
 
 
 # ---------- proposals ----------
 
 @client_mgmt_router.get("/proposals")
-async def list_proposals(request: Request, lead_id: int = 0, client_id: int = 0, status: str = "", review_status: str = ""):
-    return await sales.list_proposals(await _ctx(request), lead_id=lead_id, client_id=client_id, status=status, review_status=review_status)
+async def list_proposals(request: Request, opportunity_id: int = 0, client_id: int = 0, status: str = "", review_status: str = ""):
+    return await sales.list_proposals(await _ctx(request), opportunity_id=opportunity_id, client_id=client_id, status=status, review_status=review_status)
 
 @client_mgmt_router.get("/proposals/{proposal_id}")
 async def get_proposal(proposal_id: int, request: Request):
@@ -169,7 +247,7 @@ async def reject_proposal(proposal_id: int, data: ReasonIn, request: Request):
 
 @client_mgmt_router.post("/proposals/{proposal_id}/book-po")
 async def book_po(proposal_id: int, data: PoIn, request: Request):
-    """PO won: needs a SENT proposal with an APPROVED review. Creates the contract (DRAFT) and sets proposal ACCEPTED, tender WON and lead WON."""
+    """PO won: needs a SENT proposal with an APPROVED review. Creates the contract (DRAFT), sets the proposal ACCEPTED and its opportunity Closed Won."""
     return await sales.book_po(await _ctx(request), proposal_id, data)
 
 @client_mgmt_router.get("/proposals/{proposal_id}/pdf")
@@ -371,22 +449,10 @@ async def ledger_summary(request: Request):
     """Balance per client (clients with any ledger activity)."""
     return await acct.ledger_summary(await _ctx(request))
 
-@client_mgmt_router.get("/pipeline")
-async def pipeline(request: Request):
-    """Sales Flow summary: leads per stage (count and value), proposals, contracts, overdue follow-ups and the step-bar counts."""
-    return await sales.pipeline_summary(await _ctx(request))
-
-@client_mgmt_router.get("/kpis")
-async def kpis(request: Request):
-    return await acct.kpis(await _ctx(request))
-
-
-# ---------- dashboard, alerts and exports ----------
-
 @client_mgmt_router.get("/dashboard")
-async def dashboard(request: Request):
+async def dashboard(request: Request, owner_id: int = 0):
     """KPIs, alerts, receivables ageing (Accounts) and the 6-month invoiced / collected trend (Accounts), within the caller's access."""
-    return await reports.dashboard(await _ctx(request))
+    return await reports.dashboard(await _ctx(request), owner_id)
 
 @client_mgmt_router.get("/alerts")
 async def alerts(request: Request):

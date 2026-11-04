@@ -524,24 +524,9 @@ def _ratio_pct(num: int, den: int) -> Optional[float]:
     return round(num * 100 / den, 2) if den else None   # null (not 0) when there is nothing to divide by
 
 async def kpis(ctx: Ctx) -> dict:
-    """Sales KPIs follow the caller's scope (Sales see their own leads); receivables need Accounts access."""
+    """Receivables KPI for the Accounts side (the sales KPIs live in ``cm_crm.overview``). null, not 0, when there is nothing to measure."""
     core.require_any(ctx)
-    from app.services.cm_sales import lead_scope
-    out = {"lead_to_proposal_pct": None, "win_rate_pct": None, "pipeline_value_by_stage": None, "avg_days_lead_to_po": None, "receivables_overdue_60": None}
-    if ctx.sales:
-        scope, args = lead_scope(ctx)
-        total = (await execute_query(f"SELECT COUNT(*) AS n FROM leads l WHERE {scope}", tuple(args), fetch_one=True))["n"]
-        with_prop = (await execute_query(f"SELECT COUNT(DISTINCT p.lead_id) AS n FROM proposals p JOIN leads l ON l.id = p.lead_id WHERE {scope}", tuple(args), fetch_one=True))["n"]
-        won = (await execute_query(f"SELECT COUNT(*) AS n FROM leads l WHERE {scope} AND l.stage = 'WON'", tuple(args), fetch_one=True))["n"]
-        lost = (await execute_query(f"SELECT COUNT(*) AS n FROM leads l WHERE {scope} AND l.stage = 'LOST'", tuple(args), fetch_one=True))["n"]
-        stage_rows = await execute_query(f"SELECT l.stage, COUNT(*) AS n, COALESCE(SUM(l.estimated_value), 0) AS v FROM leads l WHERE {scope} GROUP BY l.stage", tuple(args), fetch_all=True)
-        by_stage = {s: {"count": 0, "value": 0.0} for s in core.LEAD_STAGES}
-        for r in (stage_rows or []):
-            by_stage[r["stage"]] = {"count": int(r["n"]), "value": F(r["v"])}
-        won_rows = await execute_query(f"SELECT l.created_at, l.won_at FROM leads l WHERE {scope} AND l.stage = 'WON' AND l.won_at IS NOT NULL", tuple(args), fetch_all=True)
-        days = [(datetime.fromisoformat(r["won_at"]) - datetime.fromisoformat(r["created_at"])).total_seconds() / 86400 for r in (won_rows or [])]
-        out.update({"lead_to_proposal_pct": _ratio_pct(with_prop, total), "win_rate_pct": _ratio_pct(won, won + lost), "avg_days_lead_to_po": round(sum(days) / len(days), 2) if days else None,
-                    "pipeline_value_by_stage": by_stage, "leads": {"total": total, "with_proposal": with_prop, "won": won, "lost": lost}})
+    out = {"receivables_overdue_60": None}
     if ctx.acct:
         cutoff = (core.today() - timedelta(days=core.OVERDUE_DAYS)).isoformat()
         rows = await execute_query("SELECT * FROM invoices WHERE status = 'POSTED'", fetch_all=True)

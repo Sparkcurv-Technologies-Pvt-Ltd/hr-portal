@@ -87,6 +87,5 @@ async def send_contract_documents(ctx: Ctx, contract_id: int, data) -> dict:
             attachments.append((f"{k['code']}-agreement.pdf", (await docs.agreement_pdf(ctx, contract_id)).getvalue())); names.append((LABELS[w], k["code"]))
     html_body = _cm_documents_email_html(client["name"], "Documents from Sparkcurv", names, (data.message or "").strip(), SENDER)
     _queue(to, f"{' & '.join(LABELS[w] for w in wanted)} — {k['contract_no'] or k['code']}", html_body, attachments)
-    if k["lead_id"]:
-        await core.log_activity(k["lead_id"], "EMAIL", f"Emailed to {to}: {', '.join(LABELS[w] for w in wanted)}", ctx)
+    await sales._note(k, f"Emailed to {to}: {', '.join(LABELS[w] for w in wanted)}", ctx, "Email")
     return {"message": f"Sent to {to}", "sent_to": to, "documents": wanted}

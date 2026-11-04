@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 
 class ClientIn(BaseModel):
+    """An account (company). Billing details are only needed once invoicing starts."""
     name: str
     gstin: Optional[str] = None
     billing_address: Optional[str] = None
@@ -15,6 +16,12 @@ class ClientIn(BaseModel):
     default_tds_pct: float = 0
     default_retention_pct: float = 0
     is_active: bool = True
+    industry: Optional[str] = None
+    location: Optional[str] = None
+    website: Optional[str] = None
+    account_type: Optional[str] = None      # Prospect | Active Client | Churned | Partner
+    owner_id: Optional[int] = None
+    notes: Optional[str] = None
     confirm_duplicate: bool = False     # same GSTIN as another client: confirm to create anyway
 
 
@@ -28,68 +35,117 @@ class ClientUpdate(BaseModel):
     default_tds_pct: Optional[float] = None
     default_retention_pct: Optional[float] = None
     is_active: Optional[bool] = None
+    industry: Optional[str] = None
+    location: Optional[str] = None
+    website: Optional[str] = None
+    account_type: Optional[str] = None
+    owner_id: Optional[int] = None
+    notes: Optional[str] = None
 
 
 class LeadIn(BaseModel):
-    source: str = "OTHER"               # REFERRAL | WEBSITE | EVENT | COLD_CALL | TENDER_PORTAL | PARTNER | OTHER
-    client_id: Optional[int] = None
+    """A lead — the sheet's "Leads" columns."""
     company_name: Optional[str] = None
-    contact_name: Optional[str] = None
+    contact_person: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
-    estimated_value: Optional[float] = None
-    owner_id: Optional[int] = None
-    next_followup_at: Optional[str] = None   # YYYY-MM-DD
-    note: Optional[str] = None
+    location: Optional[str] = None
+    source: str = "Other"               # Website | Referral | Cold Call | WhatsApp Inquiry | Social Media | Trade Show / Exhibition | Walk-in | Other
+    status: str = "New"                 # New | Contacted | Working | Qualified | Unqualified (Converted comes from converting)
+    date_added: Optional[str] = None    # YYYY-MM-DD, default today
+    owner_id: Optional[int] = None      # the BDR
+    interested_in: Optional[str] = None
+    next_action: Optional[str] = None
     confirm_duplicate: bool = False     # same email/phone as an existing lead: confirm to create anyway
 
 
 class LeadUpdate(BaseModel):
-    source: Optional[str] = None
-    client_id: Optional[int] = None
     company_name: Optional[str] = None
-    contact_name: Optional[str] = None
+    contact_person: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
-    estimated_value: Optional[float] = None
+    location: Optional[str] = None
+    source: Optional[str] = None
+    status: Optional[str] = None
+    date_added: Optional[str] = None
     owner_id: Optional[int] = None
-    next_followup_at: Optional[str] = None
+    interested_in: Optional[str] = None
+    next_action: Optional[str] = None
 
 
-class LeadImport(BaseModel):
-    rows: List[LeadIn]
-    confirm_duplicate: bool = False     # import rows that look like duplicates too (otherwise they are skipped and reported)
+class ConvertIn(BaseModel):
+    """Convert a lead: find or create its account and open an opportunity."""
+    opp_name: Optional[str] = None
+    deal_value: Optional[float] = None
+    expected_close_date: Optional[str] = None
+    industry: Optional[str] = None
+    next_action: Optional[str] = None
+    notes: Optional[str] = None
+    start_cadence: bool = True          # automation: open the follow-up cadence with Email 1 due today
+
+
+class OpportunityIn(BaseModel):
+    client_id: Optional[int] = None     # the account, or ...
+    company_name: Optional[str] = None  # ... a company name (the account is found or created)
+    opp_name: Optional[str] = None
+    contact_person: Optional[str] = None
+    stage: str = "Discovery"
+    deal_value: Optional[float] = None
+    expected_close_date: Optional[str] = None
+    lead_source: Optional[str] = None
+    owner_id: Optional[int] = None
+    next_action: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class OpportunityUpdate(BaseModel):
+    opp_name: Optional[str] = None
+    contact_person: Optional[str] = None
+    stage: Optional[str] = None
+    deal_value: Optional[float] = None
+    expected_close_date: Optional[str] = None
+    lead_source: Optional[str] = None
+    owner_id: Optional[int] = None
+    next_action: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class FollowupIn(BaseModel):
+    opportunity_id: Optional[int] = None
+    client_id: Optional[int] = None
+    company_name: Optional[str] = None
+    contact_person: Optional[str] = None
+    owner_id: Optional[int] = None
+    notes: Optional[str] = None
+
+
+class FollowupUpdate(BaseModel):
+    contact_person: Optional[str] = None
+    owner_id: Optional[int] = None
+    notes: Optional[str] = None
+
+
+class StepIn(BaseModel):
+    date: Optional[str] = None          # YYYY-MM-DD; empty clears the step
+    outcome: Optional[str] = None       # Pending | Completed | No Response | Skipped | Rescheduled
 
 
 class ActivityIn(BaseModel):
-    kind: str                           # CALL | EMAIL | MEETING | NOTE
-    body: str
-    next_followup_at: Optional[str] = None
-
-
-class StageMove(BaseModel):
-    stage: str                          # NEW | CONTACTED | LOST (QUALIFIED / TENDER / PROPOSAL / WON have their own actions)
-    note: str = ""
-    lost_reason: Optional[str] = None
-
-
-class QualifyIn(BaseModel):
+    log_date: Optional[str] = None      # YYYY-MM-DD, default today
+    owner_id: Optional[int] = None      # the BDR, default you
+    company_name: Optional[str] = None
     client_id: Optional[int] = None
-    create_client: bool = False         # create a client from the lead's company name
-    client: Optional[ClientIn] = None   # optional extra client details when creating
-    note: str = ""
+    activity_type: str = "Call"         # Email | Call | WhatsApp | Note
+    outcome: Optional[str] = "Completed"
+    notes: Optional[str] = None
 
 
-class TenderIn(BaseModel):
-    reference: Optional[str] = None
-    due_date: Optional[str] = None
-    notes: str = ""
-
-
-class TenderUpdate(BaseModel):
-    reference: Optional[str] = None
-    due_date: Optional[str] = None
-    status: Optional[str] = None        # OPEN | SUBMITTED | WON | LOST | CANCELLED
+class ActivityUpdate(BaseModel):
+    log_date: Optional[str] = None
+    owner_id: Optional[int] = None
+    company_name: Optional[str] = None
+    activity_type: Optional[str] = None
+    outcome: Optional[str] = None
     notes: Optional[str] = None
 
 
@@ -107,7 +163,6 @@ class ProposalIn(BaseModel):
     scope_of_work: str = ""
     tax_pct: float = 18
     valid_until: Optional[str] = None
-    tender_id: Optional[int] = None
     items: List[ItemIn] = []
 
 

@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { PromptDialog } from "./LeadDialogs";
+import { PromptDialog } from "./Prompt";
 import { ProposalEditor } from "./ProposalEditor";
 import { ContractPaperwork, AgreementPill } from "./ContractPaperwork";
 import { TONES, Pill, apiError, day, errorDetail, money, selectClass } from "./constants";
@@ -23,17 +23,17 @@ function useList(api, url, params) {
   return [rows, load];
 }
 
-export function ProposalsPanel({ api, user, level, focus }) {
+export function ProposalsPanel({ api, user, level }) {
   const [rows, load] = useList(api, "/client-mgmt/proposals");
   const [open, setOpen] = useState(null);
-  const shown = (rows || []).filter(p => !focus || (focus === "Review" ? p.status === "SENT" && p.review_status !== "APPROVED" : focus === "Proposal Sent" ? ["DRAFT", "SENT"].includes(p.status) : focus === "PO Won" ? p.status === "SENT" && p.review_status === "APPROVED" : true));
+  const shown = rows || [];
   return (
     <div className="section-card p-4 sm:p-5" data-testid="proposals-panel">
-      <h3 className="font-bold font-['Outfit'] mb-3">Proposals{focus ? ` · ${focus}` : ""}</h3>
-      <div className="overflow-x-auto"><table className="w-full min-w-[640px]"><thead><tr>{["Code", "Title", "Client", "Total", "Status", "Review"].map(h => <th key={h} className="table-header">{h}</th>)}</tr></thead>
+      <h3 className="font-bold font-['Outfit'] mb-3">Proposals</h3>
+      <div className="overflow-x-auto"><table className="w-full min-w-[640px]"><thead><tr>{["Code", "Title", "Client", "Opportunity", "Total", "Status", "Review"].map(h => <th key={h} className="table-header">{h}</th>)}</tr></thead>
         <tbody>{shown.map(p => (
           <tr key={p.id} className="table-row cursor-pointer" onClick={() => setOpen(p)} data-testid={`proposal-row-${p.id}`}>
-            <td className="table-cell font-semibold">{p.code}</td><td className="table-cell">{p.title}</td><td className="table-cell">{p.client_name}</td><td className="table-cell">{money(p.total_amount)}</td>
+            <td className="table-cell font-semibold">{p.code}</td><td className="table-cell">{p.title}</td><td className="table-cell">{p.client_name}</td><td className="table-cell text-xs">{p.opportunity_name || "—"}</td><td className="table-cell">{money(p.total_amount)}</td>
             <td className="table-cell"><Pill tone={TONES.proposal[p.status]}>{p.status}</Pill></td><td className="table-cell">{p.status === "SENT" ? <Pill tone={TONES.review[p.review_status]}>{p.review_status.replace("_", " ").toLowerCase()}</Pill> : "—"}</td></tr>))}</tbody></table>
         {rows && shown.length === 0 && <Empty>No proposals here yet.</Empty>}</div>
       {open && <ProposalEditor api={api} proposalId={open.id} open onOpenChange={(o) => !o && setOpen(null)} level={level} isOwner={open.owner_id === user.id} onChanged={load} />}
@@ -41,18 +41,18 @@ export function ProposalsPanel({ api, user, level, focus }) {
   );
 }
 
-export function ContractsPanel({ api, level, canAccounts, focus, openId }) {
+export function ContractsPanel({ api, level, canAccounts, openId }) {
   const [rows, load] = useList(api, "/client-mgmt/contracts");
   const [engage, setEngage] = useState(null);
   const [edit, setEdit] = useState(null);
   const [status, setStatus] = useState(null);
   const [paper, setPaper] = useState(openId || null);
   const isMgr = level === "mgr";
-  const shown = (rows || []).filter(k => focus === "Convert to Engagement" ? k.status === "DRAFT" : true);
+  const shown = rows || [];
   const act = async (fn, ok) => { try { await fn(); toast.success(ok); load(); } catch (e) { toast.error(apiError(e, "That didn't work")); e.handled = true; throw e; } };
   return (
     <div className="section-card p-4 sm:p-5" data-testid="contracts-panel">
-      <h3 className="font-bold font-['Outfit'] mb-3">Contracts{focus === "Convert to Engagement" ? " · waiting to convert" : ""}</h3>
+      <h3 className="font-bold font-['Outfit'] mb-3">Contracts</h3>
       <div className="overflow-x-auto"><table className="w-full min-w-[1100px]"><thead><tr>{["Code", "Client", "PO", "Value", "Margin", "Period", "Engagement", "Agreement", "Status", ""].map(h => <th key={h} className="table-header">{h}</th>)}</tr></thead>
         <tbody>{shown.map(k => (
           <tr key={k.id} className="table-row" data-testid={`contract-row-${k.id}`}>
@@ -86,31 +86,5 @@ function EditContract({ api, k, onClose, onSaved }) {
     <Dialog open onOpenChange={(o) => !o && onClose()}><DialogContent className="max-w-lg"><DialogHeader><DialogTitle>Edit {k.code}</DialogTitle></DialogHeader>
       <div className="grid grid-cols-2 gap-3">{field("contract_no", "Contract no.")}{field("po_reference", "PO reference")}{field("po_date", "PO date", "date")}{field("contract_value", "Contract value", "number")}{field("start_date", "Start", "date")}{field("end_date", "End", "date")}{field("estimated_cost", "Estimated cost", "number")}</div>
       <Button onClick={save} className={`w-full ${primary}`} data-testid="ec-save">Save</Button></DialogContent></Dialog>
-  );
-}
-
-export function ClientsPanel({ api, level, canEdit }) {
-  const [rows, load] = useList(api, "/client-mgmt/clients");
-  const [f, setF] = useState(null);
-  const [dup, setDup] = useState(null);
-  const blank = { name: "", gstin: "", billing_address: "", contact_person: "", phone: "", email: "", default_tds_pct: 0, default_retention_pct: 0 };
-  const save = async (confirm = false) => {
-    const body = { ...f, default_tds_pct: Number(f.default_tds_pct) || 0, default_retention_pct: Number(f.default_retention_pct) || 0, gstin: f.gstin || null };
-    try { f.id ? await api.put(`/client-mgmt/clients/${f.id}`, body) : await api.post("/client-mgmt/clients", { ...body, confirm_duplicate: confirm }); toast.success("Client saved"); setF(null); setDup(null); load(); }
-    catch (e) { const d = errorDetail(e); if (d?.duplicates) setDup(d); else toast.error(apiError(e, "Couldn't save")); }
-  };
-  const field = (key, label, type = "text") => <div><Label className="text-xs">{label}</Label><Input type={type} value={f[key] ?? ""} onChange={e => setF({ ...f, [key]: e.target.value })} data-testid={`cl-${key}`} /></div>;
-  return (
-    <div className="section-card p-4 sm:p-5" data-testid="clients-panel">
-      <div className="flex items-center justify-between mb-3"><h3 className="font-bold font-['Outfit']">Clients</h3>{canEdit && <Button size="sm" className="rounded-lg h-8 bg-[#0020F8] text-white hover:bg-[#0019C4]" onClick={() => { setDup(null); setF({ ...blank }); }} data-testid="new-client"><Plus className="h-3.5 w-3.5 mr-1" weight="bold" /> New client</Button>}</div>
-      <div className="overflow-x-auto"><table className="w-full min-w-[640px]"><thead><tr>{["Code", "Name", "GSTIN", "Contact", "TDS %", "Retention %", ""].map(h => <th key={h} className="table-header">{h}</th>)}</tr></thead>
-        <tbody>{(rows || []).map(c => <tr key={c.id} className="table-row" data-testid={`client-row-${c.id}`}><td className="table-cell font-semibold">{c.code}</td><td className="table-cell">{c.name}{!c.is_active && <span className="chip tone-red ml-2">inactive</span>}</td><td className="table-cell">{c.gstin || "—"}</td><td className="table-cell">{c.contact_person || "—"}<span className="block text-[11px]" style={{ color: "var(--text-subtle)" }}>{c.email || c.phone || ""}</span></td><td className="table-cell">{c.default_tds_pct}</td><td className="table-cell">{c.default_retention_pct}</td>
-          <td className="table-cell">{canEdit && <Button size="sm" variant="outline" className="rounded-lg h-8" onClick={() => { setDup(null); setF({ ...c, gstin: c.gstin || "" }); }}>Edit</Button>}</td></tr>)}</tbody></table>
-        {rows && rows.length === 0 && <Empty>No clients yet.</Empty>}</div>
-      {f && <Dialog open onOpenChange={(o) => !o && setF(null)}><DialogContent className="max-w-lg"><DialogHeader><DialogTitle>{f.id ? `Edit ${f.name}` : "New client"}</DialogTitle></DialogHeader>
-        <div className="grid grid-cols-2 gap-3"><div className="col-span-2">{field("name", "Name")}</div>{field("gstin", "GSTIN")}{field("contact_person", "Contact person")}{field("phone", "Phone")}{field("email", "Email")}<div className="col-span-2">{field("billing_address", "Billing address")}</div>{field("default_tds_pct", "Default TDS %", "number")}{field("default_retention_pct", "Default retention %", "number")}</div>
-        {dup && <div className="rounded-xl p-3 text-sm" style={{ background: "#FFFBEB", border: "1px solid #FDE68A" }} data-testid="client-duplicate"><p className="font-semibold">{dup.message}</p>{dup.duplicates.map(d => <p key={d.id} className="text-xs">{d.code} · {d.name}</p>)}{dup.can_confirm && <Button size="sm" variant="outline" className="rounded-lg h-8 mt-2" onClick={() => save(true)} data-testid="client-create-anyway">Create it anyway</Button>}</div>}
-        <Button onClick={() => save(false)} disabled={!f.name.trim()} className={`w-full ${primary}`} data-testid="cl-save">Save</Button></DialogContent></Dialog>}
-    </div>
   );
 }
